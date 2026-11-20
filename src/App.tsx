@@ -6,6 +6,7 @@ import { AppView, Header } from './components/Header';
 import { IngredientStudio } from './components/IngredientStudio';
 import { LoginScreen } from './components/LoginScreen';
 import { PalateSimulator } from './components/PalateSimulator';
+import { RecipeAnalyzer } from './components/RecipeAnalyzer';
 import { normalizeIngredient, PRESET_RECIPES, SEED_DATABASE } from './data/seedData';
 import { simulateDish } from './engine/flavorEngine';
 import { AuthUser } from './types/auth';
@@ -251,6 +252,28 @@ export function App() {
     setDatabase(SEED_DATABASE);
   };
 
+  const handleLoadRecipeIntoSimulator = (items: DishItem[], customIngredients: Ingredient[]) => {
+    if (customIngredients.length > 0) {
+      setDatabase((prev) => {
+        const existingIds = new Set(prev.ingredients.map((i) => i.id));
+        const toAdd = customIngredients.filter((ci) => !existingIds.has(ci.id));
+        if (toAdd.length === 0) return prev;
+        return {
+          ...prev,
+          ingredients: [...prev.ingredients, ...toAdd],
+        };
+      });
+    }
+    setActivePresetId(null);
+    setDishItems(
+      items.map((it, idx) => ({
+        ...it,
+        instanceId: `from_recipe_${idx}_${Date.now()}`,
+      }))
+    );
+    setActiveView('simulator');
+  };
+
   if (!authChecked) {
     return (
       <div className="flex min-h-screen items-center justify-center bg-[#0b0d10] text-sm text-stone-400">
@@ -290,6 +313,13 @@ export function App() {
             onSaveIngredient={handleSaveIngredient}
             onDeleteIngredient={handleDeleteIngredient}
             onAddToDish={(ingredientId) => handleAddIngredient(ingredientId)}
+          />
+        ) : activeView === 'recipe' ? (
+          <RecipeAnalyzer
+            database={database}
+            currentUser={currentUser}
+            onSaveIngredient={handleSaveIngredient}
+            onLoadIntoSimulator={handleLoadRecipeIntoSimulator}
           />
         ) : (
           <div className="grid grid-cols-1 gap-6 lg:h-full lg:grid-cols-12 lg:gap-0">

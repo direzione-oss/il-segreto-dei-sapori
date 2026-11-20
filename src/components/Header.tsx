@@ -4,6 +4,7 @@ import {
   Check,
   ChevronDown,
   Database,
+  FileText,
   FlaskConical,
   LogOut,
   RotateCcw,
@@ -17,7 +18,7 @@ import {
 import { AuthUser } from '../types/auth';
 import { PresetRecipe } from '../types/flavor';
 
-export type AppView = 'simulator' | 'ingredients';
+export type AppView = 'simulator' | 'recipe' | 'ingredients';
 
 interface HeaderProps {
   activeView: AppView;
@@ -141,6 +142,21 @@ export const Header: React.FC<HeaderProps> = ({
                   {dishCount}
                 </span>
               )}
+            </button>
+            <button
+              type="button"
+              onClick={() => onChangeView('recipe')}
+              className={`inline-flex items-center gap-2 rounded-lg px-3 py-1.5 text-xs font-medium transition ${
+                activeView === 'recipe'
+                  ? 'bg-amber-500/20 text-amber-200 ring-1 ring-amber-400/40 shadow-[0_0_16px_rgba(217,155,67,0.14)]'
+                  : 'text-stone-400 hover:bg-white/[0.04] hover:text-stone-200'
+              }`}
+            >
+              <FileText className="h-3.5 w-3.5" />
+              <span>Analisi Ricetta</span>
+              <span className="rounded bg-amber-500/15 px-1.5 py-0.5 font-code text-[9px] uppercase text-amber-300">
+                IA
+              </span>
             </button>
             <button
               type="button"
