@@ -1,0 +1,61 @@
+@import "tailwindcss";
+
+@theme {
+  --font-serif: "Cormorant Garamond", Georgia, serif;
+  --font-sans: "Inter", system-ui, -apple-system, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, monospace;
+}
+
+@layer base {
+  body {
+    font-family: var(--font-sans);
+    background-color: #0b0d10;
+    color: #f4efe6;
+    background-image:
+      radial-gradient(ellipse 80% 50% at 20% -10%, rgba(217, 155, 67, 0.08), transparent 60%),
+      radial-gradient(ellipse 60% 40% at 85% 0%, rgba(56, 189, 248, 0.05), transparent 55%);
+    background-attachment: fixed;
+  }
+}
+
+.font-display {
+  font-family: var(--font-serif);
+}
+
+.font-code {
+  font-family: var(--font-mono);
+}
+
+/* Custom sleek scrollbars */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: rgba(255, 255, 255, 0.02);
+}
+
+::-webkit-scrollbar-thumb {
+  background: rgba(217, 155, 67, 0.25);
+  border-radius: 9999px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(217, 155, 67, 0.45);
+}
+
+@keyframes fadeSlideIn {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.animate-fade-in {
+  animation: fadeSlideIn 0.25s ease-out forwards;
+}
