@@ -1,10 +1,13 @@
-import React from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   Beaker,
+  Check,
+  ChevronDown,
   Database,
   FlaskConical,
   LogOut,
   RotateCcw,
+  Search,
   Shield,
   Sparkles,
   Trash2,
@@ -47,10 +50,56 @@ export const Header: React.FC<HeaderProps> = ({
   ingredientCount,
   techniqueCount,
 }) => {
+  const [isPresetMenuOpen, setIsPresetMenuOpen] = useState(false);
+  const [presetQuery, setPresetQuery] = useState('');
+  const presetDropdownRef = useRef<HTMLDivElement | null>(null);
+
+  const activePreset = useMemo(
+    () => presets.find((p) => p.id === activePresetId) ?? null,
+    [presets, activePresetId]
+  );
+
+  const filteredPresets = useMemo(() => {
+    const q = presetQuery.trim().toLowerCase();
+    if (!q) return presets;
+    return presets.filter(
+      (p) =>
+        p.name.toLowerCase().includes(q) ||
+        p.subtitle.toLowerCase().includes(q) ||
+        p.description.toLowerCase().includes(q)
+    );
+  }, [presets, presetQuery]);
+
+  // Chiudi la tendina cliccando fuori o premendo Escape
+  useEffect(() => {
+    if (!isPresetMenuOpen) return;
+    const handleClickOutside = (e: MouseEvent) => {
+      if (presetDropdownRef.current && !presetDropdownRef.current.contains(e.target as Node)) {
+        setIsPresetMenuOpen(false);
+      }
+    };
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setIsPresetMenuOpen(false);
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    document.addEventListener('keydown', handleKeyDown);
+    return () => {
+      document.removeEventListener('mousedown', handleClickOutside);
+      document.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [isPresetMenuOpen]);
+
+  // Chiudi tendina se si cambia sezione
+  useEffect(() => {
+    if (activeView !== 'simulator') {
+      setIsPresetMenuOpen(false);
+    }
+  }, [activeView]);
+
   return (
     <header className="sticky top-0 z-30 border-b border-white/10 bg-[#0b0d10]/85 backdrop-blur-xl">
       <div className="mx-auto max-w-[1520px] px-4 py-3.5 sm:px-6">
-        <div className="flex flex-wrap items-center justify-between gap-4">
+        <div className="flex flex-wrap items-center justify-between gap-3">
           {/* Brand */}
           <div className="flex items-center gap-3.5">
             <div className="flex h-10 w-10 items-center justify-center rounded-xl border border-amber-400/30 bg-gradient-to-br from-amber-500/20 to-orange-600/10 text-amber-300 shadow-[0_0_24px_rgba(217,155,67,0.18)]">
@@ -111,7 +160,126 @@ export const Header: React.FC<HeaderProps> = ({
           </nav>
 
           {/* Actions */}
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center gap-2">
+            {/* Tendina Ricette Test (solo nella vista Simulatore) */}
+            {activeView === 'simulator' && (
+              <div ref={presetDropdownRef} className="relative">
+                <button
+                  type="button"
+                  onClick={() => setIsPresetMenuOpen((prev) => !prev)}
+                  aria-expanded={isPresetMenuOpen}
+                  aria-haspopup="listbox"
+                  className={`inline-flex max-w-[230px] items-center gap-2 rounded-lg border px-3 py-2 text-xs font-medium transition ${
+                    isPresetMenuOpen || activePreset
+                      ? 'border-amber-400/45 bg-amber-500/12 text-amber-100 hover:bg-amber-500/20'
+                      : 'border-white/10 bg-white/[0.04] text-stone-200 hover:border-amber-400/40 hover:bg-amber-500/10 hover:text-amber-200'
+                  }`}
+                  title={activePreset ? `Ricetta attiva: ${activePreset.name}` : 'Seleziona una ricetta test'}
+                >
+                  <Sparkles className="h-3.5 w-3.5 shrink-0 text-amber-400" />
+                  <span className="truncate">
+                    {activePreset ? activePreset.name : `Ricette Test (${presets.length})`}
+                  </span>
+                  <ChevronDown
+                    className={`h-3.5 w-3.5 shrink-0 text-stone-400 transition-transform ${
+                      isPresetMenuOpen ? 'rotate-180 text-amber-300' : ''
+                    }`}
+                  />
+                </button>
+
+                {isPresetMenuOpen && (
+                  <div className="absolute right-0 mt-2 w-[320px] sm:w-[390px] overflow-hidden rounded-2xl border border-white/15 bg-[#12151c] shadow-2xl shadow-black/70 ring-1 ring-white/5">
+                    <div className="border-b border-white/10 bg-[#0d1015] p-3">
+                      <div className="mb-2 flex items-center justify-between">
+                        <div className="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wider text-amber-300">
+                          <Sparkles className="h-3.5 w-3.5" />
+                          <span>Ricette Test ({presets.length})</span>
+                        </div>
+                        {activePreset && (
+                          <button
+                            type="button"
+                            onClick={() => {
+                              onLoadPreset(activePreset);
+                              setIsPresetMenuOpen(false);
+                            }}
+                            className="inline-flex items-center gap-1 rounded-md px-2 py-0.5 text-[11px] text-stone-400 transition hover:bg-white/5 hover:text-amber-300"
+                            title="Ricarica i valori originali del preset attivo"
+                          >
+                            <RotateCcw className="h-3 w-3" />
+                            <span>Ripristina</span>
+                          </button>
+                        )}
+                      </div>
+
+                      <div className="relative">
+                        <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-stone-500" />
+                        <input
+                          type="text"
+                          value={presetQuery}
+                          onChange={(e) => setPresetQuery(e.target.value)}
+                          placeholder="Filtra ricette..."
+                          className="w-full rounded-lg border border-white/10 bg-[#0b0d11] py-1.5 pl-8 pr-3 text-xs text-stone-100 placeholder-stone-500 outline-none focus:border-amber-400/50"
+                        />
+                      </div>
+                    </div>
+
+                    <div className="max-h-[380px] overflow-y-auto p-1.5" role="listbox">
+                      {filteredPresets.length === 0 ? (
+                        <div className="p-4 text-center text-xs text-stone-500">
+                          Nessuna ricetta trovata.
+                        </div>
+                      ) : (
+                        filteredPresets.map((preset) => {
+                          const isActive = activePresetId === preset.id;
+                          return (
+                            <button
+                              key={preset.id}
+                              type="button"
+                              role="option"
+                              aria-selected={isActive}
+                              onClick={() => {
+                                onLoadPreset(preset);
+                                setIsPresetMenuOpen(false);
+                                setPresetQuery('');
+                              }}
+                              className={`mb-1 flex w-full items-start justify-between gap-2.5 rounded-xl border px-3 py-2.5 text-left transition last:mb-0 ${
+                                isActive
+                                  ? 'border-amber-400/50 bg-amber-500/15 text-amber-100'
+                                  : 'border-transparent bg-transparent text-stone-200 hover:border-white/10 hover:bg-white/[0.04]'
+                              }`}
+                            >
+                              <div className="min-w-0">
+                                <div className="flex items-center gap-2">
+                                  <span className="truncate text-xs font-semibold">
+                                    {preset.name}
+                                  </span>
+                                  <span className="shrink-0 rounded bg-white/10 px-1.5 py-0.5 font-code text-[10px] text-stone-300">
+                                    {preset.items.length} ingr.
+                                  </span>
+                                </div>
+                                {preset.subtitle && (
+                                  <div className="mt-0.5 text-[11px] font-medium text-amber-300/80">
+                                    {preset.subtitle}
+                                  </div>
+                                )}
+                                <p className="mt-0.5 line-clamp-2 text-[11px] leading-snug text-stone-400">
+                                  {preset.description}
+                                </p>
+                              </div>
+
+                              {isActive && (
+                                <Check className="mt-0.5 h-4 w-4 shrink-0 text-amber-400" />
+                              )}
+                            </button>
+                          );
+                        })
+                      )}
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
+
             <button
               type="button"
               onClick={onOpenDatabase}
@@ -160,50 +328,6 @@ export const Header: React.FC<HeaderProps> = ({
             </button>
           </div>
         </div>
-
-        {/* Preset Strip (solo nella vista Simulatore) */}
-        {activeView === 'simulator' && (
-        <div className="mt-2.5 flex items-center gap-2 overflow-x-auto border-t border-white/[0.06] pt-2.5 pb-1">
-          <div className="mr-1 flex shrink-0 items-center gap-1.5 text-[11px] font-medium uppercase tracking-wider text-stone-400">
-            <Sparkles className="h-3.5 w-3.5 text-amber-400" />
-            <span>Ricette Test ({presets.length}):</span>
-          </div>
-
-          {presets.map((preset) => {
-            const isActive = activePresetId === preset.id;
-            return (
-              <button
-                key={preset.id}
-                type="button"
-                onClick={() => onLoadPreset(preset)}
-                className={`group inline-flex shrink-0 items-center gap-2 rounded-lg border px-2.5 py-1.5 text-left text-xs transition-all ${
-                  isActive
-                    ? 'border-amber-400/50 bg-amber-500/15 text-amber-100 shadow-[0_0_16px_rgba(217,155,67,0.14)]'
-                    : 'border-white/10 bg-white/[0.03] text-stone-300 hover:border-amber-400/30 hover:bg-white/[0.06] hover:text-stone-100'
-                }`}
-                title={`${preset.name} — ${preset.description}`}
-              >
-                <span className="whitespace-nowrap font-medium">{preset.name}</span>
-              </button>
-            );
-          })}
-
-          {activePresetId && (
-            <button
-              type="button"
-              onClick={() => {
-                const p = presets.find((x) => x.id === activePresetId);
-                if (p) onLoadPreset(p);
-              }}
-              className="ml-auto inline-flex shrink-0 items-center gap-1 pl-2 text-[11px] text-stone-400 transition hover:text-amber-300"
-              title="Ricarica i valori originali del preset"
-            >
-              <RotateCcw className="h-3 w-3" />
-              <span className="hidden md:inline">Ripristina</span>
-            </button>
-          )}
-        </div>
-        )}
       </div>
     </header>
   );
