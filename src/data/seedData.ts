@@ -2341,4 +2341,145 @@ export const PRESET_RECIPES: PresetRecipe[] = [
       { ingredientId: 'ing_lemon', techniqueId: 'tech_cryo_granita', dosage: 'garnish' },
     ],
   },
+  {
+    id: 'preset_risotto_zucca_gorgonzola_nocciole',
+    name: 'Risotto Zucca Arrostita, Gorgonzola Piccante e Nocciola Tostata',
+    subtitle: 'Dolcezza Caramellata • Erborinato & Croccante',
+    description:
+      'Bilancia la dolcezza caramellata della zucca arrostita con la spinta sapida e fungina del gorgonzola mantecato, chiudendo con la croccantezza tostata della nocciola.',
+    items: [
+      { ingredientId: 'ing_rice_carnaroli', techniqueId: 'tech_risottatura', dosage: 'main' },
+      { ingredientId: 'ing_pumpkin_delica', techniqueId: 'tech_maillard_sear', dosage: 'secondary' },
+      { ingredientId: 'ing_gorgonzola_piccante', techniqueId: 'tech_emulsion_mantecatura', dosage: 'secondary' },
+      { ingredientId: 'ing_hazelnut', techniqueId: 'tech_dry_toast_spices', dosage: 'garnish' },
+      { ingredientId: 'ing_sage', techniqueId: 'tech_brown_butter_infusion', dosage: 'garnish' },
+    ],
+  },
+  {
+    id: 'preset_capasanta_miso_yuzu',
+    name: 'Capasanta Scottata, Burro Nocciola al Miso e Yuzu',
+    subtitle: 'Maillard Marino • Sinergia Umami-Agrume',
+    description:
+      'La crosticina di Maillard sulla capasanta si lega ai lattoni del burro nocciola e all’umami dello Shiro Miso, alleggeriti in finale dall’acidità aromatica dello yuzu.',
+    items: [
+      { ingredientId: 'ing_scallop', techniqueId: 'tech_maillard_sear', dosage: 'main' },
+      { ingredientId: 'ing_butter', techniqueId: 'tech_brown_butter_infusion', dosage: 'secondary' },
+      { ingredientId: 'ing_miso_white', techniqueId: 'tech_emulsion_mantecatura', dosage: 'secondary' },
+      { ingredientId: 'ing_yuzu', techniqueId: 'tech_raw', dosage: 'garnish' },
+    ],
+  },
+  {
+    id: 'preset_agnello_carciofi_menta',
+    name: "Carré d'Agnello alla Brace, Carciofo Confit e Menta",
+    subtitle: 'Fumé, Amaro Vegetale & Freschezza Terpenica',
+    description:
+      'Classico studio romano: la brace sviluppa note fenoliche sull’agnello, mentre il carciofo confit smussa l’astringenza e menta + limone puliscono il palato dai grassi.',
+    items: [
+      { ingredientId: 'ing_lamb_rack', techniqueId: 'tech_charcoal_grill', dosage: 'main' },
+      { ingredientId: 'ing_artichoke', techniqueId: 'tech_confit_fat', dosage: 'secondary' },
+      { ingredientId: 'ing_pecorino', techniqueId: 'tech_raw', dosage: 'garnish' },
+      { ingredientId: 'ing_mint', techniqueId: 'tech_raw', dosage: 'garnish' },
+      { ingredientId: 'ing_lemon', techniqueId: 'tech_raw', dosage: 'garnish' },
+    ],
+  },
+  {
+    id: 'preset_spaghetti_vongole_bottarga',
+    name: 'Spaghetti Vongole Veraci, Bottarga di Muggine e Limone',
+    subtitle: 'Esplosione Iodata • Emulsione Amido-Mare',
+    description:
+      'Sovrapposizione di umami marino tra vongole al vapore e bottarga di muggine, armonizzata dalla mantecatura degli amidi, aglio confit dolce e scorza di limone.',
+    items: [
+      { ingredientId: 'ing_pasta_semolina', techniqueId: 'tech_emulsion_mantecatura', dosage: 'main' },
+      { ingredientId: 'ing_clams', techniqueId: 'tech_steam_poach', dosage: 'secondary' },
+      { ingredientId: 'ing_bottarga', techniqueId: 'tech_raw', dosage: 'garnish' },
+      { ingredientId: 'ing_garlic', techniqueId: 'tech_confit_fat', dosage: 'garnish' },
+      { ingredientId: 'ing_lemon', techniqueId: 'tech_raw', dosage: 'garnish' },
+      { ingredientId: 'ing_parsley', techniqueId: 'tech_raw', dosage: 'garnish' },
+    ],
+  },
+  {
+    id: 'preset_melanzana_miso_sesamo',
+    name: 'Melanzana alla Brace Glassata al Miso, Sesamo e Lime',
+    subtitle: 'Nasu Dengaku • Umami Vegetale & Acidità',
+    description:
+      'La melanzana grigliata assorbe la glassatura caramellata di miso bianco e olio di sesamo tostato; lime e zenzero fresco aggiungono attacco agrumato e pungenza.',
+    items: [
+      { ingredientId: 'ing_eggplant', techniqueId: 'tech_charcoal_grill', dosage: 'main' },
+      { ingredientId: 'ing_miso_white', techniqueId: 'tech_caramelize_braise', dosage: 'secondary' },
+      { ingredientId: 'ing_toasted_sesame_oil', techniqueId: 'tech_raw', dosage: 'garnish' },
+      { ingredientId: 'ing_lime', techniqueId: 'tech_raw', dosage: 'garnish' },
+      { ingredientId: 'ing_ginger', techniqueId: 'tech_raw', dosage: 'garnish' },
+    ],
+  },
+  {
+    id: 'preset_tataki_tonno_avocado_sichuan',
+    name: 'Tataki di Tonno Rosso, Avocado, Soia e Pepe di Sichuan',
+    subtitle: 'Crudo-Scottato • Cremoso, Umami & Pungenza Agrumata',
+    description:
+      'Contrasto tra la rosolatura esterna del tonno rosso e la cremosità burrosa dell’avocado, collegati da salsa di soia, lime e note terpeniche vibranti del pepe di Sichuan.',
+    items: [
+      { ingredientId: 'ing_bluefin_tuna', techniqueId: 'tech_maillard_sear', dosage: 'main' },
+      { ingredientId: 'ing_avocado', techniqueId: 'tech_raw', dosage: 'secondary' },
+      { ingredientId: 'ing_soy_sauce', techniqueId: 'tech_raw', dosage: 'garnish' },
+      { ingredientId: 'ing_lime', techniqueId: 'tech_raw', dosage: 'garnish' },
+      { ingredientId: 'ing_sichuan_pepper', techniqueId: 'tech_dry_toast_spices', dosage: 'garnish' },
+    ],
+  },
+  {
+    id: 'preset_baccala_ceci_colatura',
+    name: 'Baccalà CBT, Crema di Ceci, Rosmarino e Colatura di Alici',
+    subtitle: 'Bassa Temperatura • Vellutato & Spinta Sapida',
+    description:
+      'La cottura sous-vide preserva la succosità del baccalà sulla crema emulsionata di ceci, mentre rosmarino confit e colatura di alici creano profondità aromatica mediterranea.',
+    items: [
+      { ingredientId: 'ing_cod_baccala', techniqueId: 'tech_sous_vide', dosage: 'main' },
+      { ingredientId: 'ing_chickpeas', techniqueId: 'tech_emulsion_mantecatura', dosage: 'secondary' },
+      { ingredientId: 'ing_rosemary', techniqueId: 'tech_confit_fat', dosage: 'garnish' },
+      { ingredientId: 'ing_colatura_alici', techniqueId: 'tech_raw', dosage: 'garnish' },
+      { ingredientId: 'ing_evoo', techniqueId: 'tech_raw', dosage: 'garnish' },
+    ],
+  },
+  {
+    id: 'preset_barbabietola_caprino_lampone',
+    name: 'Barbabietola Affumicata, Caprino Fresco, Lampone e Noci',
+    subtitle: 'Ponte Geosmina-Frutto Rosso • Terra & Acidità',
+    description:
+      'L’affumicatura dolce esalta la geosmina della barbabietola in dialogo con l’acidità lattica del caprino, la freschezza del lampone, le noci tostate e il balsamico invecchiato.',
+    items: [
+      { ingredientId: 'ing_beetroot', techniqueId: 'tech_light_smoke', dosage: 'main' },
+      { ingredientId: 'ing_goat_cheese', techniqueId: 'tech_raw', dosage: 'secondary' },
+      { ingredientId: 'ing_raspberry', techniqueId: 'tech_raw', dosage: 'secondary' },
+      { ingredientId: 'ing_walnut', techniqueId: 'tech_dry_toast_spices', dosage: 'garnish' },
+      { ingredientId: 'ing_balsamic_aged', techniqueId: 'tech_raw', dosage: 'garnish' },
+    ],
+  },
+  {
+    id: 'preset_pollo_cocco_mango_curcuma',
+    name: 'Pollo Croccante, Latte di Cocco, Mango, Curcuma e Lime',
+    subtitle: 'Equilibrio Speziato • Lattoni, Dolcezza Esotica & Freschezza',
+    description:
+      'Pelle croccante di pollo rosolata immersa nei lattoni avvolgenti del latte di cocco stufato con curcuma tostata, rinfrescati da mango maturo, lime e coriandolo.',
+    items: [
+      { ingredientId: 'ing_chicken_thigh', techniqueId: 'tech_maillard_sear', dosage: 'main' },
+      { ingredientId: 'ing_coconut_milk', techniqueId: 'tech_caramelize_braise', dosage: 'secondary' },
+      { ingredientId: 'ing_mango', techniqueId: 'tech_raw', dosage: 'secondary' },
+      { ingredientId: 'ing_turmeric', techniqueId: 'tech_dry_toast_spices', dosage: 'garnish' },
+      { ingredientId: 'ing_lime', techniqueId: 'tech_raw', dosage: 'garnish' },
+      { ingredientId: 'ing_cilantro', techniqueId: 'tech_raw', dosage: 'garnish' },
+    ],
+  },
+  {
+    id: 'preset_cioccolato_pera_caffe_cardamomo',
+    name: 'Ganache Cioccolato 85%, Pera Caramellata, Caffè e Cardamomo',
+    subtitle: 'Dessert Molecolare • Pirazine Tostate & Note Floreali',
+    description:
+      'Ponte diretto sulle pirazine tostate tra cioccolato fondente emulsionato e caffè espresso, bilanciato dalla dolcezza fruttata della pera caramellata, cardamomo tostato e fiocchi di sale.',
+    items: [
+      { ingredientId: 'ing_dark_chocolate_85', techniqueId: 'tech_emulsion_mantecatura', dosage: 'main' },
+      { ingredientId: 'ing_pear_williams', techniqueId: 'tech_caramelize_braise', dosage: 'secondary' },
+      { ingredientId: 'ing_coffee_espresso', techniqueId: 'tech_raw', dosage: 'garnish' },
+      { ingredientId: 'ing_cardamom', techniqueId: 'tech_dry_toast_spices', dosage: 'garnish' },
+      { ingredientId: 'ing_sea_salt', techniqueId: 'tech_raw', dosage: 'garnish' },
+    ],
+  },
 ];
