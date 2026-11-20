@@ -188,7 +188,7 @@ export const Header: React.FC<HeaderProps> = ({
                 </button>
 
                 {isPresetMenuOpen && (
-                  <div className="absolute right-0 mt-2 w-[320px] sm:w-[390px] overflow-hidden rounded-2xl border border-white/15 bg-[#12151c] shadow-2xl shadow-black/70 ring-1 ring-white/5">
+                  <div className="absolute left-0 z-50 mt-2 w-[320px] max-w-[calc(100vw-2rem)] sm:w-[390px] overflow-hidden rounded-2xl border border-white/15 bg-[#12151c] shadow-2xl shadow-black/70 ring-1 ring-white/5">
                     <div className="border-b border-white/10 bg-[#0d1015] p-3">
                       <div className="mb-2 flex items-center justify-between">
                         <div className="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wider text-amber-300">
