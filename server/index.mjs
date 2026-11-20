@@ -396,8 +396,8 @@ app.delete('/api/database', requireAuth, (req, res) => {
 // --- FRONTEND STATICO (PRODUZIONE) ---
 if (fs.existsSync(DIST_DIR)) {
   app.use(express.static(DIST_DIR));
-  app.get('*', (req, res, next) => {
-    if (req.path.startsWith('/api/')) return next();
+  app.use((req, res, next) => {
+    if (req.method !== 'GET' || req.path.startsWith('/api/')) return next();
     return res.sendFile(path.join(DIST_DIR, 'index.html'));
   });
 }
