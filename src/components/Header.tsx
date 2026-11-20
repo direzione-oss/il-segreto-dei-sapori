@@ -1,9 +1,24 @@
 import React from 'react';
-import { Beaker, Database, LogOut, RotateCcw, Shield, Sparkles, Trash2, User } from 'lucide-react';
+import {
+  Beaker,
+  Database,
+  FlaskConical,
+  LogOut,
+  RotateCcw,
+  Shield,
+  Sparkles,
+  Trash2,
+  User,
+  UtensilsCrossed,
+} from 'lucide-react';
 import { AuthUser } from '../types/auth';
 import { PresetRecipe } from '../types/flavor';
 
+export type AppView = 'simulator' | 'ingredients';
+
 interface HeaderProps {
+  activeView: AppView;
+  onChangeView: (view: AppView) => void;
   presets: PresetRecipe[];
   activePresetId: string | null;
   onLoadPreset: (preset: PresetRecipe) => void;
@@ -18,6 +33,8 @@ interface HeaderProps {
 }
 
 export const Header: React.FC<HeaderProps> = ({
+  activeView,
+  onChangeView,
   presets,
   activePresetId,
   onLoadPreset,
@@ -54,6 +71,45 @@ export const Header: React.FC<HeaderProps> = ({
             </div>
           </div>
 
+          {/* Main View Switcher */}
+          <nav
+            aria-label="Sezioni principali"
+            className="flex items-center gap-1 rounded-xl border border-white/10 bg-white/[0.03] p-1"
+          >
+            <button
+              type="button"
+              onClick={() => onChangeView('simulator')}
+              className={`inline-flex items-center gap-2 rounded-lg px-3 py-1.5 text-xs font-medium transition ${
+                activeView === 'simulator'
+                  ? 'bg-amber-500/20 text-amber-200 ring-1 ring-amber-400/40 shadow-[0_0_16px_rgba(217,155,67,0.14)]'
+                  : 'text-stone-400 hover:bg-white/[0.04] hover:text-stone-200'
+              }`}
+            >
+              <UtensilsCrossed className="h-3.5 w-3.5" />
+              <span>Simulatore Piatto</span>
+              {dishCount > 0 && (
+                <span className="rounded bg-white/10 px-1.5 py-0.5 font-code text-[10px]">
+                  {dishCount}
+                </span>
+              )}
+            </button>
+            <button
+              type="button"
+              onClick={() => onChangeView('ingredients')}
+              className={`inline-flex items-center gap-2 rounded-lg px-3 py-1.5 text-xs font-medium transition ${
+                activeView === 'ingredients'
+                  ? 'bg-amber-500/20 text-amber-200 ring-1 ring-amber-400/40 shadow-[0_0_16px_rgba(217,155,67,0.14)]'
+                  : 'text-stone-400 hover:bg-white/[0.04] hover:text-stone-200'
+              }`}
+            >
+              <FlaskConical className="h-3.5 w-3.5" />
+              <span>Atlante Ingredienti</span>
+              <span className="rounded bg-white/10 px-1.5 py-0.5 font-code text-[10px]">
+                {ingredientCount}
+              </span>
+            </button>
+          </nav>
+
           {/* Actions */}
           <div className="flex items-center gap-2">
             <button
@@ -68,7 +124,7 @@ export const Header: React.FC<HeaderProps> = ({
               </span>
             </button>
 
-            {dishCount > 0 && (
+            {activeView === 'simulator' && dishCount > 0 && (
               <button
                 type="button"
                 onClick={onClearDish}
@@ -105,7 +161,8 @@ export const Header: React.FC<HeaderProps> = ({
           </div>
         </div>
 
-        {/* Preset Strip */}
+        {/* Preset Strip (solo nella vista Simulatore) */}
+        {activeView === 'simulator' && (
         <div className="mt-2.5 flex items-center gap-2 overflow-x-auto border-t border-white/[0.06] pt-2.5 pb-1">
           <div className="mr-1 flex shrink-0 items-center gap-1.5 text-[11px] font-medium uppercase tracking-wider text-stone-400">
             <Sparkles className="h-3.5 w-3.5 text-amber-400" />
@@ -146,6 +203,7 @@ export const Header: React.FC<HeaderProps> = ({
             </button>
           )}
         </div>
+        )}
       </div>
     </header>
   );

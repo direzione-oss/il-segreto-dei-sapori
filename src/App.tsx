@@ -2,13 +2,16 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { AccountModal } from './components/AccountModal';
 import { DatabaseModal } from './components/DatabaseModal';
 import { DishBuilder } from './components/DishBuilder';
-import { Header } from './components/Header';
+import { AppView, Header } from './components/Header';
+import { IngredientStudio } from './components/IngredientStudio';
 import { LoginScreen } from './components/LoginScreen';
 import { PalateSimulator } from './components/PalateSimulator';
 import { normalizeIngredient, PRESET_RECIPES, SEED_DATABASE } from './data/seedData';
 import { simulateDish } from './engine/flavorEngine';
 import { AuthUser } from './types/auth';
 import { DishItem, Dosage, FlavorDatabase, Ingredient, PresetRecipe, Technique } from './types/flavor';
+
+const SEED_INGREDIENT_IDS = new Set(SEED_DATABASE.ingredients.map((i) => i.id));
 
 function buildPresetDish(preset: PresetRecipe): DishItem[] {
   return preset.items.map((it, idx) => ({
@@ -25,6 +28,7 @@ export function App() {
   const [dbLoadedForUser, setDbLoadedForUser] = useState(false);
   const skipNextSaveRef = useRef(true);
 
+  const [activeView, setActiveView] = useState<AppView>('simulator');
   const [activePresetId, setActivePresetId] = useState<string | null>(PRESET_RECIPES[0].id);
   const [dishItems, setDishItems] = useState<DishItem[]>(() => buildPresetDish(PRESET_RECIPES[0]));
   const [isDbOpen, setIsDbOpen] = useState(false);
@@ -66,10 +70,19 @@ export function App() {
         if (!active) return;
         const parsed = data?.database;
         if (Array.isArray(parsed?.ingredients) && Array.isArray(parsed?.techniques)) {
-          // Unisce eventuali nuovi ingredienti/tecniche aggiunti al seed senza sovrascrivere quelli dell'utente
-          const mergedIngs = new Map(SEED_DATABASE.ingredients.map((i) => [i.id, i]));
+          const deletedSet = new Set<string>(
+            Array.isArray(parsed.deletedIngredientIds) ? parsed.deletedIngredientIds : []
+          );
+          // Unisce eventuali nuovi ingredienti/tecniche aggiunti al seed senza ripristinare quelli eliminati dall'utente
+          const mergedIngs = new Map(
+            SEED_DATABASE.ingredients
+              .filter((i) => !deletedSet.has(i.id))
+              .map((i) => [i.id, i])
+          );
           for (const raw of parsed.ingredients) {
-            if (raw?.id) mergedIngs.set(raw.id, normalizeIngredient(raw));
+            if (raw?.id && !deletedSet.has(raw.id)) {
+              mergedIngs.set(raw.id, normalizeIngredient(raw));
+            }
           }
           const mergedTechs = new Map(SEED_DATABASE.techniques.map((t) => [t.id, t]));
           for (const t of parsed.techniques) {
@@ -79,6 +92,7 @@ export function App() {
           setDatabase({
             ingredients: Array.from(mergedIngs.values()),
             techniques: Array.from(mergedTechs.values()),
+            deletedIngredientIds: Array.from(deletedSet),
           });
         } else {
           skipNextSaveRef.current = true;
@@ -186,7 +200,38 @@ export function App() {
     setDatabase((prev) => ({
       ...prev,
       ingredients: [...prev.ingredients, ing],
+      deletedIngredientIds: (prev.deletedIngredientIds ?? []).filter((id) => id !== ing.id),
     }));
+  };
+
+  const handleSaveIngredient = (ing: Ingredient) => {
+    setDatabase((prev) => {
+      const exists = prev.ingredients.some((i) => i.id === ing.id);
+      const nextIngredients = exists
+        ? prev.ingredients.map((i) => (i.id === ing.id ? ing : i))
+        : [...prev.ingredients, ing];
+      const nextDeleted = (prev.deletedIngredientIds ?? []).filter((id) => id !== ing.id);
+      return {
+        ...prev,
+        ingredients: nextIngredients,
+        deletedIngredientIds: nextDeleted,
+      };
+    });
+  };
+
+  const handleDeleteIngredient = (ingredientId: string) => {
+    setDatabase((prev) => {
+      const nextDeleted = new Set(prev.deletedIngredientIds ?? []);
+      if (SEED_INGREDIENT_IDS.has(ingredientId)) {
+        nextDeleted.add(ingredientId);
+      }
+      return {
+        ...prev,
+        ingredients: prev.ingredients.filter((i) => i.id !== ingredientId),
+        deletedIngredientIds: Array.from(nextDeleted),
+      };
+    });
+    setDishItems((prev) => prev.filter((item) => item.ingredientId !== ingredientId));
   };
 
   const handleAddCustomTechnique = (tech: Technique) => {
@@ -222,6 +267,8 @@ export function App() {
     <div className="flex min-h-screen flex-col bg-[#0b0d10] text-[#f4efe6] lg:h-screen lg:overflow-hidden">
       <div className="shrink-0">
         <Header
+          activeView={activeView}
+          onChangeView={setActiveView}
           presets={PRESET_RECIPES}
           activePresetId={activePresetId}
           onLoadPreset={handleLoadPreset}
@@ -237,28 +284,37 @@ export function App() {
       </div>
 
       <main className="mx-auto w-full max-w-[1520px] flex-1 px-4 py-5 sm:px-6 lg:min-h-0 lg:overflow-hidden lg:py-0">
-        <div className="grid grid-cols-1 gap-6 lg:h-full lg:grid-cols-12 lg:gap-0">
-          {/* Colonna Sinistra: Costruttore del Piatto (scroll indipendente) */}
-          <div className="lg:col-span-5 lg:h-full lg:overflow-y-auto lg:border-r lg:border-white/[0.06] lg:py-5 lg:pr-5">
-            <DishBuilder
-              ingredients={database.ingredients}
-              techniques={database.techniques}
-              transformedItems={simulation.items}
-              onAddIngredient={handleAddIngredient}
-              onChangeTechnique={handleChangeTechnique}
-              onChangeDosage={handleChangeDosage}
-              onRemoveItem={handleRemoveItem}
-            />
-          </div>
+        {activeView === 'ingredients' ? (
+          <IngredientStudio
+            ingredients={database.ingredients}
+            onSaveIngredient={handleSaveIngredient}
+            onDeleteIngredient={handleDeleteIngredient}
+            onAddToDish={(ingredientId) => handleAddIngredient(ingredientId)}
+          />
+        ) : (
+          <div className="grid grid-cols-1 gap-6 lg:h-full lg:grid-cols-12 lg:gap-0">
+            {/* Colonna Sinistra: Costruttore del Piatto (scroll indipendente) */}
+            <div className="lg:col-span-5 lg:h-full lg:overflow-y-auto lg:border-r lg:border-white/[0.06] lg:py-5 lg:pr-5">
+              <DishBuilder
+                ingredients={database.ingredients}
+                techniques={database.techniques}
+                transformedItems={simulation.items}
+                onAddIngredient={handleAddIngredient}
+                onChangeTechnique={handleChangeTechnique}
+                onChangeDosage={handleChangeDosage}
+                onRemoveItem={handleRemoveItem}
+              />
+            </div>
 
-          {/* Colonna Destra: Simulatore del Risultato al Palato (scroll indipendente) */}
-          <div className="lg:col-span-7 lg:h-full lg:overflow-y-auto lg:py-5 lg:pl-5">
-            <PalateSimulator
-              simulation={simulation}
-              onApplySuggestion={handleAddIngredient}
-            />
+            {/* Colonna Destra: Simulatore del Risultato al Palato (scroll indipendente) */}
+            <div className="lg:col-span-7 lg:h-full lg:overflow-y-auto lg:py-5 lg:pl-5">
+              <PalateSimulator
+                simulation={simulation}
+                onApplySuggestion={handleAddIngredient}
+              />
+            </div>
           </div>
-        </div>
+        )}
       </main>
 
       <footer className="shrink-0 border-t border-white/[0.06] py-2.5 text-center text-[11px] text-stone-500">
