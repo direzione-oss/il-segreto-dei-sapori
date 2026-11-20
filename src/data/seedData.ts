@@ -11,6 +11,7 @@ import {
   TasteVector,
   Technique,
 } from '../types/flavor';
+import { SPICEMASTER_INGREDIENTS } from './spicemasterIngredients';
 
 export function clamp(val: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, val));
@@ -2232,7 +2233,7 @@ export const SEED_TECHNIQUES: Technique[] = [
 ];
 
 export const SEED_DATABASE: FlavorDatabase = {
-  ingredients: RAW_SEED_INGREDIENTS.map(normalizeIngredient),
+  ingredients: [...RAW_SEED_INGREDIENTS, ...SPICEMASTER_INGREDIENTS].map(normalizeIngredient),
   techniques: SEED_TECHNIQUES,
 };
 
