@@ -12,6 +12,7 @@ import {
   Technique,
 } from '../types/flavor';
 import { SPICEMASTER_INGREDIENTS } from './spicemasterIngredients';
+import { ITALIAN_HISTORICAL_PRESETS } from './italianHistoricalRecipes';
 
 export function clamp(val: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, val));
@@ -2238,6 +2239,7 @@ export const SEED_DATABASE: FlavorDatabase = {
 };
 
 export const PRESET_RECIPES: PresetRecipe[] = [
+  ...ITALIAN_HISTORICAL_PRESETS,
   {
     id: 'preset_brasato',
     name: 'Brasato Manzo & Cipolla Caramellata',
