@@ -228,6 +228,7 @@ export interface PresetRecipe {
 export interface FlavorDatabase {
   ingredients: Ingredient[];
   techniques: Technique[];
+  deletedIngredientIds?: string[];
 }
 
 // ==========================================
