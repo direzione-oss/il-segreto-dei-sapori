@@ -16,6 +16,7 @@ import {
   KeyRound,
   Link2,
   Loader2,
+  PackageCheck,
   Paperclip,
   Plus,
   PlusCircle,
@@ -26,6 +27,7 @@ import {
   Sparkles,
   Trash2,
   Wand2,
+  Workflow,
   X,
   Zap,
 } from 'lucide-react';
@@ -42,16 +44,22 @@ import { simulateDish } from '../engine/flavorEngine';
 import {
   buildMarkdownReport,
   buildSavedCharacteristics,
+  compilePhasesToSimulationData,
+  ensureRecipePhases,
   ExtractedRecipeItem,
+  formatQuantityAndUnit,
   normalizeAiRecipeResponse,
   openPrintableReport,
   parseRecipeLocally,
+  PlannedRecipeIngredient,
   RecipeAnalysisResult,
+  RecipePhase,
   SAMPLE_RECIPES,
   SavedRecipe,
 } from '../engine/recipeParser';
 import { AuthUser } from '../types/auth';
 import { FlavorSolid3D } from './FlavorSolid3D';
+import { RecipePhasesEditor } from './RecipePhasesEditor';
 import {
   AROMA_KEYS,
   AROMA_META,
@@ -100,6 +108,7 @@ export const RecipeAnalyzer: React.FC<RecipeAnalyzerProps> = ({
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
   const [analysis, setAnalysis] = useState<RecipeAnalysisResult | null>(null);
+  const [editorTab, setEditorTab] = useState<'phases' | 'text'>('text');
   const [copiedMd, setCopiedMd] = useState(false);
   const [savedCustomIds, setSavedCustomIds] = useState<Set<string>>(new Set());
   const [quickAddIngId, setQuickAddIngId] = useState('');
@@ -163,9 +172,24 @@ export const RecipeAnalyzer: React.FC<RecipeAnalyzerProps> = ({
     };
   }, []);
 
-  // Database effettivo per la simulazione del report (include eventuali ingredienti stimati dall'IA)
+  // Compila le Fasi (se presenti) nel motore chimico-sensoriale a cascata
+  const compiledFromPhases = useMemo(() => {
+    if (!analysis || !Array.isArray(analysis.fasi) || analysis.fasi.length === 0) {
+      return null;
+    }
+    return compilePhasesToSimulationData(
+      analysis.fasi,
+      analysis.plannedIngredients || [],
+      database
+    );
+  }, [analysis, database]);
+
+  // Database effettivo per la simulazione del report (include eventuali ingredienti stimati dall'IA e tecniche concatenate dei semilavorati)
   const effectiveDatabase = useMemo<FlavorDatabase>(() => {
     if (!analysis) return database;
+    if (compiledFromPhases && compiledFromPhases.items.length > 0) {
+      return compiledFromPhases.effectiveDatabase;
+    }
     const existingIds = new Set(database.ingredients.map((i) => i.id));
     const extras = analysis.items
       .map((it) => it.customIngredient)
@@ -175,17 +199,21 @@ export const RecipeAnalyzer: React.FC<RecipeAnalyzerProps> = ({
       ...database,
       ingredients: [...database.ingredients, ...extras],
     };
-  }, [database, analysis]);
+  }, [database, analysis, compiledFromPhases]);
 
   const dishItemsForReport = useMemo<DishItem[]>(() => {
     if (!analysis) return [];
-    return analysis.items.map((it) => ({
+    const activeItems =
+      compiledFromPhases && compiledFromPhases.items.length > 0
+        ? compiledFromPhases.items
+        : analysis.items;
+    return activeItems.map((it) => ({
       instanceId: it.id,
       ingredientId: it.ingredientId,
       techniqueId: it.techniqueId,
       dosage: it.dosage,
     }));
-  }, [analysis]);
+  }, [analysis, compiledFromPhases]);
 
   const simulation = useMemo(
     () => simulateDish(dishItemsForReport, effectiveDatabase),
@@ -196,9 +224,99 @@ export const RecipeAnalyzer: React.FC<RecipeAnalyzerProps> = ({
 
   const handleLoadSample = (sample: (typeof SAMPLE_RECIPES)[number]) => {
     setAttachedPdf(null);
+    setActiveSavedId(null);
     setRecipeTitle(sample.title);
     setRecipeText(sample.text);
     setErrorMsg(null);
+    const localRes = parseRecipeLocally(sample.title, sample.text, database);
+    setAnalysis(localRes);
+    setEditorTab('phases');
+  };
+
+  const handleCreateNewPhasedRecipe = () => {
+    setAttachedPdf(null);
+    setActiveSavedId(null);
+    const title = recipeTitle.trim() || 'Nuova Ricetta a Fasi';
+    setRecipeTitle(title);
+    setErrorMsg(null);
+
+    const p1Id = `phase_1_${Date.now().toString(36)}`;
+    const p2Id = `phase_2_${Date.now().toString(36)}`;
+    const initialFasi: RecipePhase[] = [
+      {
+        id: p1Id,
+        ordine: 1,
+        titolo: 'Fase 1 - Preparazione base / Soffritto',
+        tecnica_id: 'tech_pan_saute_soffritto',
+        tempo_minuti: 10,
+        temperatura: 110,
+        attrezzatura: 'Padella / Casseruola',
+        istruzioni: 'Prepara la base aromatica della ricetta.',
+        output_nome: 'Base aromatica Fase 1',
+        inputs: [],
+      },
+      {
+        id: p2Id,
+        ordine: 2,
+        titolo: 'Fase 2 - Cottura principale e unione',
+        tecnica_id: 'tech_emulsion_mantecatura',
+        tempo_minuti: 12,
+        temperatura: 95,
+        attrezzatura: 'Padella / Tegame',
+        istruzioni: 'Unisci il semilavorato della Fase 1 agli altri ingredienti e completa la cottura.',
+        output_nome: 'Piatto finito',
+        inputs: [
+          {
+            id: `pin_semi_${p2Id}_${p1Id}`,
+            tipo: 'SEMILAVORATO',
+            riferimento_id: p1Id,
+            label: 'Base aromatica Fase 1',
+            quantita: 1,
+            unita_misura: 'lotto',
+          },
+        ],
+      },
+    ];
+
+    setAnalysis({
+      title,
+      servings: '4 porzioni',
+      summary: 'Ricetta strutturata in fasi sequenziali con concatenazione dei semilavorati.',
+      chefNotes: [],
+      engine: 'local',
+      items: [],
+      fasi: initialFasi,
+      plannedIngredients: [],
+      unmatched: [],
+      analyzedAt: new Date().toISOString(),
+    });
+    setEditorTab('phases');
+  };
+
+  const handlePhasesChange = (
+    nextFasi: RecipePhase[],
+    nextPlanned: PlannedRecipeIngredient[]
+  ) => {
+    setAnalysis((prev) => {
+      const base: RecipeAnalysisResult = prev || {
+        title: recipeTitle.trim() || 'Ricetta a Fasi',
+        servings: '4 porzioni',
+        summary: '',
+        chefNotes: [],
+        engine: 'local',
+        items: [],
+        unmatched: [],
+        analyzedAt: new Date().toISOString(),
+      };
+      const compiled = compilePhasesToSimulationData(nextFasi, nextPlanned, database);
+      return {
+        ...base,
+        title: recipeTitle.trim() || base.title,
+        fasi: nextFasi,
+        plannedIngredients: nextPlanned,
+        items: compiled.items,
+      };
+    });
   };
 
   const handleSaveServerAiConfig = async (clear = false) => {
@@ -263,10 +381,11 @@ export const RecipeAnalyzer: React.FC<RecipeAnalyzerProps> = ({
         }
         if (engineMode === 'auto' && !hasAiAvailable) {
           localRes.fallbackNotice = pdfAttachment
-            ? `PDF "${pdfAttachment.fileName}" (${pdfAttachment.pages} pag.) letto e analizzato con il Motore Locale.`
-            : 'Analisi eseguita con il Motore Locale (nessuna chiave IA configurata: puoi attivarla da "Impostazioni IA").';
+            ? `PDF "${pdfAttachment.fileName}" (${pdfAttachment.pages} pag.) letto e scomposto in fasi con il Motore Locale.`
+            : 'Analisi e scomposizione in fasi eseguite con il Motore Locale.';
         }
         setAnalysis(localRes);
+        setEditorTab('phases');
         return;
       }
 
@@ -308,12 +427,22 @@ export const RecipeAnalyzer: React.FC<RecipeAnalyzerProps> = ({
           data.provider,
           data.model
         );
+        if (text.length > 20) {
+          const autoP = ensureRecipePhases(
+            { ...normalized, fasi: undefined },
+            database,
+            text
+          );
+          normalized.fasi = autoP.fasi;
+          normalized.plannedIngredients = autoP.plannedIngredients;
+        }
         if (pdfAttachment) {
           normalized.sourcePdfName = pdfAttachment.fileName;
           normalized.sourcePdfPages = pdfAttachment.pages;
         }
         if (normalized.items.length > 0) {
           setAnalysis(normalized);
+          setEditorTab('phases');
           return;
         }
       }
@@ -325,8 +454,9 @@ export const RecipeAnalyzer: React.FC<RecipeAnalyzerProps> = ({
         localFallback.sourcePdfName = pdfAttachment.fileName;
         localFallback.sourcePdfPages = pdfAttachment.pages;
       }
-      localFallback.fallbackNotice = `IA non disponibile (${errData?.error || 'errore temporaneo'}): report generato automaticamente con il Motore Locale.`;
+      localFallback.fallbackNotice = `IA non disponibile (${errData?.error || 'errore temporaneo'}): report e fasi generati automaticamente con il Motore Locale.`;
       setAnalysis(localFallback);
+      setEditorTab('phases');
     } catch {
       const localFallback = parseRecipeLocally(titleToUse, text, database);
       if (pdfAttachment) {
@@ -334,8 +464,9 @@ export const RecipeAnalyzer: React.FC<RecipeAnalyzerProps> = ({
         localFallback.sourcePdfPages = pdfAttachment.pages;
       }
       localFallback.fallbackNotice =
-        'Errore di connessione al servizio IA: report generato con il Motore Locale.';
+        'Errore di connessione al servizio IA: report e fasi generati con il Motore Locale.';
       setAnalysis(localFallback);
+      setEditorTab('phases');
     } finally {
       setIsAnalyzing(false);
     }
@@ -502,6 +633,7 @@ export const RecipeAnalyzer: React.FC<RecipeAnalyzerProps> = ({
     setSaveFeedback(null);
     try {
       const characteristics = buildSavedCharacteristics(simulation);
+      const ensured = ensureRecipePhases(analysis, database, recipeText);
       const payload = {
         id: saveAsNew ? undefined : activeSavedId || undefined,
         title: (recipeTitle.trim() || analysis.title || 'Ricetta Salvata').trim(),
@@ -515,7 +647,12 @@ export const RecipeAnalyzer: React.FC<RecipeAnalyzerProps> = ({
         model: analysis.model || null,
         sourcePdfName: analysis.sourcePdfName || null,
         sourcePdfPages: analysis.sourcePdfPages || null,
-        items: analysis.items,
+        items:
+          compiledFromPhases && compiledFromPhases.items.length > 0
+            ? compiledFromPhases.items
+            : analysis.items,
+        fasi: ensured.fasi,
+        plannedIngredients: ensured.plannedIngredients,
         characteristics,
       };
 
@@ -544,8 +681,8 @@ export const RecipeAnalyzer: React.FC<RecipeAnalyzerProps> = ({
         type: 'ok',
         text:
           !saveAsNew && activeSavedId
-            ? 'Ricetta e caratteristiche aggiornate nel Ricettario!'
-            : 'Ricetta salvata nel tuo Ricettario con tutte le caratteristiche trovate!',
+            ? 'Ricetta, fasi e caratteristiche aggiornate nel Ricettario!'
+            : 'Ricetta salvata nel tuo Ricettario con fasi e caratteristiche trovate!',
       });
       setTimeout(() => setSaveFeedback(null), 4000);
     } catch {
@@ -572,7 +709,8 @@ export const RecipeAnalyzer: React.FC<RecipeAnalyzerProps> = ({
     setUserNotes(saved.userNotes || '');
     setSaveFeedback(null);
     setErrorMsg(null);
-    setAnalysis({
+
+    const baseAnalysis: RecipeAnalysisResult = {
       title: saved.title,
       servings: saved.servings,
       summary: saved.summary,
@@ -583,9 +721,20 @@ export const RecipeAnalyzer: React.FC<RecipeAnalyzerProps> = ({
       sourcePdfName: saved.sourcePdfName || null,
       sourcePdfPages: saved.sourcePdfPages || null,
       items: saved.items || [],
+      fasi: saved.fasi,
+      plannedIngredients: saved.plannedIngredients,
       unmatched: [],
       analyzedAt: saved.updatedAt || saved.createdAt,
+    };
+
+    // Retrocompatibilità (Criterio di Accettazione 4): se priva di fasi, genera "Fase 1 - Preparazione generale"
+    const ensured = ensureRecipePhases(baseAnalysis, database, saved.recipeText || '');
+    setAnalysis({
+      ...baseAnalysis,
+      fasi: ensured.fasi,
+      plannedIngredients: ensured.plannedIngredients,
     });
+    setEditorTab('phases');
   };
 
   const handleDeleteSavedRecipe = async (saved: SavedRecipe) => {
@@ -948,118 +1097,198 @@ export const RecipeAnalyzer: React.FC<RecipeAnalyzerProps> = ({
               </select>
             </div>
 
-            {/* Titolo opzionale */}
+            {/* Titolo Ricetta + Selettore Modalità Editor (Blocchi Fasi vs Testo) */}
             <div className="mt-4">
-              <label
-                htmlFor="recipe-title-input"
-                className="mb-1 block text-[11px] font-medium uppercase tracking-wider text-stone-400"
-              >
-                Titolo Ricetta (opzionale)
-              </label>
+              <div className="mb-1 flex flex-wrap items-center justify-between gap-2">
+                <label
+                  htmlFor="recipe-title-input"
+                  className="block text-[11px] font-medium uppercase tracking-wider text-stone-400"
+                >
+                  Titolo Ricetta
+                </label>
+                <button
+                  type="button"
+                  onClick={handleCreateNewPhasedRecipe}
+                  className="inline-flex items-center gap-1 rounded-md border border-amber-400/35 bg-amber-500/10 px-2 py-0.5 text-[11px] font-medium text-amber-200 transition hover:bg-amber-500/20"
+                  title="Crea da zero una nuova ricetta strutturata in più fasi con semilavorati"
+                >
+                  <Plus className="h-3 w-3" />
+                  <span>Nuova Ricetta a Fasi</span>
+                </button>
+              </div>
               <input
                 id="recipe-title-input"
                 type="text"
                 value={recipeTitle}
-                onChange={(e) => setRecipeTitle(e.target.value)}
+                onChange={(e) => {
+                  setRecipeTitle(e.target.value);
+                  if (analysis) {
+                    setAnalysis((prev) =>
+                      prev ? { ...prev, title: e.target.value || prev.title } : prev
+                    );
+                  }
+                }}
                 placeholder="Es. Spaghetti alla Carbonara, Risotto ai Porcini..."
                 className="w-full rounded-xl border border-white/10 bg-[#0b0d11] px-3.5 py-2.5 text-xs text-stone-100 placeholder-stone-500 outline-none transition focus:border-amber-400/50"
               />
             </div>
 
-            {/* Area testo ricetta */}
-            <div className="mt-3.5">
-              <div className="mb-1 flex items-center justify-between">
-                <label
-                  htmlFor="recipe-text-input"
-                  className="text-[11px] font-medium uppercase tracking-wider text-stone-400"
-                >
-                  Testo della Ricetta (Ingredienti + Procedimento)
-                </label>
-                {(recipeText || attachedPdf) && (
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setAttachedPdf(null);
-                      setRecipeTitle('');
-                      setRecipeText('');
-                      setErrorMsg(null);
-                    }}
-                    className="text-[11px] text-stone-500 hover:text-rose-300"
-                  >
-                    Pulisci
-                  </button>
+            {/* Switcher Modalità: Editor a Fasi (Blocchi) vs Testo della Ricetta */}
+            <div className="mt-3.5 flex items-center justify-between gap-2 rounded-xl border border-white/10 bg-[#0b0d11] p-1">
+              <button
+                type="button"
+                onClick={() => {
+                  if (!analysis && recipeText.trim()) {
+                    const localRes = parseRecipeLocally(recipeTitle, recipeText, database);
+                    setAnalysis(localRes);
+                  } else if (!analysis) {
+                    handleCreateNewPhasedRecipe();
+                    return;
+                  }
+                  setEditorTab('phases');
+                }}
+                className={`flex flex-1 items-center justify-center gap-1.5 rounded-lg px-3 py-2 text-xs font-semibold transition ${
+                  editorTab === 'phases'
+                    ? 'bg-amber-500/20 text-amber-200 ring-1 ring-amber-400/40 shadow'
+                    : 'text-stone-400 hover:text-stone-200'
+                }`}
+              >
+                <Workflow className="h-3.5 w-3.5" />
+                <span>
+                  Editor a Fasi &amp; Semilavorati
+                  {analysis?.fasi?.length ? ` (${analysis.fasi.length})` : ''}
+                </span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => setEditorTab('text')}
+                className={`flex flex-1 items-center justify-center gap-1.5 rounded-lg px-3 py-2 text-xs font-semibold transition ${
+                  editorTab === 'text'
+                    ? 'bg-amber-500/20 text-amber-200 ring-1 ring-amber-400/40 shadow'
+                    : 'text-stone-400 hover:text-stone-200'
+                }`}
+              >
+                <FileText className="h-3.5 w-3.5" />
+                <span>Testo Ricetta / Estrazione IA</span>
+              </button>
+            </div>
+
+            {editorTab === 'phases' && analysis ? (
+              <div className="mt-3.5">
+                <RecipePhasesEditor
+                  database={database}
+                  fasi={
+                    analysis.fasi && analysis.fasi.length > 0
+                      ? analysis.fasi
+                      : ensureRecipePhases(analysis, database, recipeText).fasi
+                  }
+                  plannedIngredients={
+                    analysis.plannedIngredients && analysis.plannedIngredients.length > 0
+                      ? analysis.plannedIngredients
+                      : ensureRecipePhases(analysis, database, recipeText).plannedIngredients
+                  }
+                  onChange={handlePhasesChange}
+                />
+              </div>
+            ) : (
+              <>
+                {/* Area testo ricetta */}
+                <div className="mt-3.5">
+                  <div className="mb-1 flex items-center justify-between">
+                    <label
+                      htmlFor="recipe-text-input"
+                      className="text-[11px] font-medium uppercase tracking-wider text-stone-400"
+                    >
+                      Testo della Ricetta (Ingredienti + Procedimento)
+                    </label>
+                    {(recipeText || attachedPdf) && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setAttachedPdf(null);
+                          setRecipeTitle('');
+                          setRecipeText('');
+                          setErrorMsg(null);
+                        }}
+                        className="text-[11px] text-stone-500 hover:text-rose-300"
+                      >
+                        Pulisci
+                      </button>
+                    )}
+                  </div>
+                  <textarea
+                    id="recipe-text-input"
+                    rows={10}
+                    value={recipeText}
+                    onChange={(e) => setRecipeText(e.target.value)}
+                    placeholder={`Incolla qui la ricetta completa, ad esempio:\n\nIngredienti:\n- 320 g di spaghetti\n- 150 g di guanciale\n- 4 tuorli d'uovo\n- 80 g di pecorino romano\n- Pepe nero q.b.\n\nProcedimento:\nRosola il guanciale fino a renderlo croccante, tosta il pepe e manteca la pasta...`}
+                    className="w-full resize-y rounded-xl border border-white/10 bg-[#0b0d11] p-3.5 text-xs leading-relaxed text-stone-100 placeholder-stone-500 outline-none transition focus:border-amber-400/50"
+                  />
+                </div>
+
+                {/* Selettore Motore */}
+                <div className="mt-3.5 flex flex-wrap items-center justify-between gap-2">
+                  <div className="flex items-center gap-1 rounded-lg border border-white/10 bg-[#0b0d11] p-1">
+                    <button
+                      type="button"
+                      onClick={() => setEngineMode('auto')}
+                      className={`inline-flex items-center gap-1.5 rounded-md px-2.5 py-1 text-[11px] font-medium transition ${
+                        engineMode === 'auto'
+                          ? 'bg-amber-500/20 text-amber-200 ring-1 ring-amber-400/35'
+                          : 'text-stone-400 hover:text-stone-200'
+                      }`}
+                    >
+                      <Sparkles className="h-3 w-3" />
+                      <span>Auto {hasAiAvailable ? '(IA)' : '(Locale)'}</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setEngineMode('local')}
+                      className={`inline-flex items-center gap-1.5 rounded-md px-2.5 py-1 text-[11px] font-medium transition ${
+                        engineMode === 'local'
+                          ? 'bg-amber-500/20 text-amber-200 ring-1 ring-amber-400/35'
+                          : 'text-stone-400 hover:text-stone-200'
+                      }`}
+                    >
+                      <Cpu className="h-3 w-3" />
+                      <span>Solo Locale</span>
+                    </button>
+                  </div>
+
+                  <span className="font-code text-[10px] text-stone-500">
+                    {recipeText.length} caratteri
+                  </span>
+                </div>
+
+                {errorMsg && (
+                  <div className="mt-3 flex items-center gap-2 rounded-xl border border-rose-500/35 bg-rose-500/10 px-3 py-2 text-xs text-rose-200">
+                    <AlertCircle className="h-4 w-4 shrink-0 text-rose-400" />
+                    <span>{errorMsg}</span>
+                  </div>
                 )}
-              </div>
-              <textarea
-                id="recipe-text-input"
-                rows={12}
-                value={recipeText}
-                onChange={(e) => setRecipeText(e.target.value)}
-                placeholder={`Incolla qui la ricetta completa, ad esempio:\n\nIngredienti:\n- 320 g di spaghetti\n- 150 g di guanciale\n- 4 tuorli d'uovo\n- 80 g di pecorino romano\n- Pepe nero q.b.\n\nProcedimento:\nRosola il guanciale fino a renderlo croccante, tosta il pepe e manteca la pasta...`}
-                className="w-full resize-y rounded-xl border border-white/10 bg-[#0b0d11] p-3.5 text-xs leading-relaxed text-stone-100 placeholder-stone-500 outline-none transition focus:border-amber-400/50"
-              />
-            </div>
 
-            {/* Selettore Motore */}
-            <div className="mt-3.5 flex flex-wrap items-center justify-between gap-2">
-              <div className="flex items-center gap-1 rounded-lg border border-white/10 bg-[#0b0d11] p-1">
+                {/* Pulsante Analizza */}
                 <button
                   type="button"
-                  onClick={() => setEngineMode('auto')}
-                  className={`inline-flex items-center gap-1.5 rounded-md px-2.5 py-1 text-[11px] font-medium transition ${
-                    engineMode === 'auto'
-                      ? 'bg-amber-500/20 text-amber-200 ring-1 ring-amber-400/35'
-                      : 'text-stone-400 hover:text-stone-200'
-                  }`}
+                  disabled={isAnalyzing || !recipeText.trim()}
+                  onClick={handleAnalyze}
+                  className="mt-4 flex w-full items-center justify-center gap-2 rounded-xl bg-gradient-to-r from-amber-500 to-orange-500 px-4 py-3 text-xs font-semibold text-stone-950 shadow-lg shadow-amber-500/20 transition hover:from-amber-400 hover:to-orange-400 disabled:cursor-not-allowed disabled:opacity-45"
                 >
-                  <Sparkles className="h-3 w-3" />
-                  <span>Auto {hasAiAvailable ? '(IA)' : '(Locale)'}</span>
+                  {isAnalyzing ? (
+                    <>
+                      <Loader2 className="h-4 w-4 animate-spin" />
+                      <span>Analisi e scomposizione in fasi in corso...</span>
+                    </>
+                  ) : (
+                    <>
+                      <Wand2 className="h-4 w-4" />
+                      <span>Analizza Testo, Scomponi in Fasi e Genera Report</span>
+                    </>
+                  )}
                 </button>
-                <button
-                  type="button"
-                  onClick={() => setEngineMode('local')}
-                  className={`inline-flex items-center gap-1.5 rounded-md px-2.5 py-1 text-[11px] font-medium transition ${
-                    engineMode === 'local'
-                      ? 'bg-amber-500/20 text-amber-200 ring-1 ring-amber-400/35'
-                      : 'text-stone-400 hover:text-stone-200'
-                  }`}
-                >
-                  <Cpu className="h-3 w-3" />
-                  <span>Solo Locale</span>
-                </button>
-              </div>
-
-              <span className="font-code text-[10px] text-stone-500">
-                {recipeText.length} caratteri
-              </span>
-            </div>
-
-            {errorMsg && (
-              <div className="mt-3 flex items-center gap-2 rounded-xl border border-rose-500/35 bg-rose-500/10 px-3 py-2 text-xs text-rose-200">
-                <AlertCircle className="h-4 w-4 shrink-0 text-rose-400" />
-                <span>{errorMsg}</span>
-              </div>
+              </>
             )}
-
-            {/* Pulsante Analizza */}
-            <button
-              type="button"
-              disabled={isAnalyzing || !recipeText.trim()}
-              onClick={handleAnalyze}
-              className="mt-4 flex w-full items-center justify-center gap-2 rounded-xl bg-gradient-to-r from-amber-500 to-orange-500 px-4 py-3 text-xs font-semibold text-stone-950 shadow-lg shadow-amber-500/20 transition hover:from-amber-400 hover:to-orange-400 disabled:cursor-not-allowed disabled:opacity-45"
-            >
-              {isAnalyzing ? (
-                <>
-                  <Loader2 className="h-4 w-4 animate-spin" />
-                  <span>Analisi ingredienti e sapori in corso...</span>
-                </>
-              ) : (
-                <>
-                  <Wand2 className="h-4 w-4" />
-                  <span>Analizza Ricetta e Genera Report</span>
-                </>
-              )}
-            </button>
           </div>
 
           {/* CARD: Il Mio Ricettario Salvato (con Caratteristiche Trovate) */}
@@ -1564,6 +1793,101 @@ export const RecipeAnalyzer: React.FC<RecipeAnalyzerProps> = ({
                 </div>
               </div>
             </div>
+
+            {/* Pipeline Fasi di Lavorazione & Flusso Semilavorati nel Report */}
+            {Array.isArray(analysis.fasi) && analysis.fasi.length > 0 && (
+              <div className="rounded-2xl border border-white/10 bg-[#11141a]/95 p-5 shadow-xl">
+                <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+                  <div className="flex items-center gap-2">
+                    <Workflow className="h-4 w-4 text-amber-400" />
+                    <h3 className="text-xs font-semibold uppercase tracking-wider text-stone-200">
+                      Pipeline Fasi di Lavorazione &amp; Semilavorati ({analysis.fasi.length}{' '}
+                      {analysis.fasi.length === 1 ? 'Fase' : 'Fasi'})
+                    </h3>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setEditorTab('phases')}
+                    className="rounded-lg border border-amber-400/30 bg-amber-500/10 px-2.5 py-1 text-[11px] font-medium text-amber-200 transition hover:bg-amber-500/20"
+                  >
+                    Modifica Fasi &amp; Semilavorati
+                  </button>
+                </div>
+
+                <div className="space-y-2.5">
+                  {analysis.fasi.map((f) => {
+                    const techObj = database.techniques.find((t) => t.id === f.tecnica_id);
+                    const params = [
+                      f.tempo_minuti ? `${f.tempo_minuti} min` : null,
+                      f.temperatura ? `${f.temperatura}°C` : null,
+                      f.attrezzatura || null,
+                    ].filter(Boolean);
+
+                    return (
+                      <div
+                        key={f.id}
+                        className="rounded-xl border border-white/[0.07] bg-[#0c0f14] p-3"
+                      >
+                        <div className="flex flex-wrap items-center justify-between gap-2">
+                          <div className="flex flex-wrap items-center gap-2">
+                            <span className="rounded bg-amber-500/20 px-2 py-0.5 font-code text-[10px] font-bold text-amber-200">
+                              FASE {f.ordine}
+                            </span>
+                            <span className="text-xs font-semibold text-stone-100">
+                              {f.titolo}
+                            </span>
+                            <span className="rounded border border-white/10 bg-white/[0.04] px-2 py-0.5 text-[10px] text-amber-300">
+                              {techObj?.name.split(' (')[0] || f.tecnica_id}
+                            </span>
+                            {params.length > 0 && (
+                              <span className="font-code text-[10px] text-stone-400">
+                                ({params.join(' • ')})
+                              </span>
+                            )}
+                          </div>
+
+                          <span className="inline-flex items-center gap-1 rounded-full border border-purple-400/30 bg-purple-500/10 px-2.5 py-0.5 text-[10px] font-medium text-purple-200">
+                            <PackageCheck className="h-3 w-3 text-purple-300" />
+                            <span>Output: [{f.output_nome}]</span>
+                          </span>
+                        </div>
+
+                        {f.inputs.length > 0 && (
+                          <div className="mt-2 flex flex-wrap gap-1.5">
+                            {f.inputs.map((inp) =>
+                              inp.tipo === 'SEMILAVORATO' ? (
+                                <span
+                                  key={inp.id}
+                                  className="inline-flex items-center gap-1 rounded-md border border-purple-400/35 bg-purple-500/15 px-2 py-0.5 text-[10px] font-semibold text-purple-200"
+                                >
+                                  <span>➔ [Semilavorato: {inp.label}]</span>
+                                </span>
+                              ) : (
+                                <span
+                                  key={inp.id}
+                                  className="inline-flex items-center gap-1 rounded-md border border-white/10 bg-white/[0.04] px-2 py-0.5 text-[10px] text-stone-200"
+                                >
+                                  <span>{inp.label}</span>
+                                  <strong className="font-code text-amber-200">
+                                    {formatQuantityAndUnit(inp.quantita, inp.unita_misura)}
+                                  </strong>
+                                </span>
+                              )
+                            )}
+                          </div>
+                        )}
+
+                        {f.istruzioni && (
+                          <p className="mt-1.5 text-[11px] leading-relaxed text-stone-400">
+                            {f.istruzioni}
+                          </p>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
 
             {/* Tabella Ingredienti Estratti (modificabili in tempo reale) */}
             <div className="rounded-2xl border border-white/10 bg-[#11141a]/95 p-5 shadow-xl">

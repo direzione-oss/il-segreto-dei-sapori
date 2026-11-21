@@ -838,6 +838,8 @@ app.post('/api/recipes', requireAuth, (req, res) => {
     sourcePdfName: payload.sourcePdfName ? String(payload.sourcePdfName) : null,
     sourcePdfPages: payload.sourcePdfPages ? Number(payload.sourcePdfPages) : null,
     items,
+    fasi: Array.isArray(payload.fasi) ? payload.fasi : [],
+    plannedIngredients: Array.isArray(payload.plannedIngredients) ? payload.plannedIngredients : [],
     characteristics:
       payload.characteristics && typeof payload.characteristics === 'object'
         ? payload.characteristics

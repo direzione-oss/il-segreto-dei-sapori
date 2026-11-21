@@ -1,5 +1,6 @@
 import { ITALIAN_HISTORICAL_SAMPLES } from '../data/italianHistoricalRecipes';
-import { normalizeIngredient } from '../data/seedData';
+import { clamp, normalizeIngredient } from '../data/seedData';
+import { transformIngredient } from './flavorEngine';
 import {
   AROMA_KEYS,
   AROMA_META,
@@ -13,7 +14,53 @@ import {
   MOUTHFEEL_META,
   TASTE_KEYS,
   TASTE_META,
+  Technique,
 } from '../types/flavor';
+
+export type PhaseInputType = 'INGREDIENTE' | 'SEMILAVORATO';
+
+export interface PhaseInput {
+  id: string;
+  tipo: PhaseInputType;
+  riferimento_id: string; // ID dell'ingrediente oppure phase.id della fase precedente
+  label: string;
+  quantita: number;
+  unita_misura: string;
+  dosage?: Dosage;
+}
+
+export interface RecipePhase {
+  id: string;
+  ordine: number;
+  titolo: string;
+  tecnica_id: string;
+  tempo_minuti: number | null;
+  temperatura: number | null;
+  attrezzatura?: string;
+  istruzioni: string;
+  output_nome: string;
+  inputs: PhaseInput[];
+}
+
+export interface PlannedRecipeIngredient {
+  ingredientId: string;
+  name: string;
+  totalQuantity: number;
+  unit: string;
+  dosage: Dosage;
+  customIngredient?: Ingredient;
+}
+
+export interface IngredientAllocationStatus {
+  ingredientId: string;
+  name: string;
+  unit: string;
+  plannedTotal: number;
+  assignedTotal: number;
+  remaining: number;
+  status: 'exact' | 'unassigned' | 'exceeded';
+  usages: { phaseId: string; phaseOrder: number; phaseTitle: string; quantita: number }[];
+}
 
 export interface ExtractedRecipeItem {
   id: string;
@@ -40,6 +87,8 @@ export interface RecipeAnalysisResult {
   sourcePdfName?: string | null;
   sourcePdfPages?: number | null;
   items: ExtractedRecipeItem[];
+  fasi?: RecipePhase[];
+  plannedIngredients?: PlannedRecipeIngredient[];
   unmatched: string[];
   analyzedAt: string;
 }
@@ -92,6 +141,8 @@ export interface SavedRecipe {
   sourcePdfName?: string | null;
   sourcePdfPages?: number | null;
   items: ExtractedRecipeItem[];
+  fasi?: RecipePhase[];
+  plannedIngredients?: PlannedRecipeIngredient[];
   characteristics: SavedRecipeCharacteristics | null;
   createdAt: string;
   updatedAt: string;
@@ -691,6 +742,8 @@ export function parseRecipeLocally(
     }
   }
 
+  const autoPhases = buildAutoPhasesFromProcedure(recipeText, items, database);
+
   return {
     title: title || 'Ricetta Analizzata',
     servings,
@@ -698,8 +751,703 @@ export function parseRecipeLocally(
     chefNotes,
     engine: 'local',
     items,
+    fasi: autoPhases.fasi,
+    plannedIngredients: autoPhases.plannedIngredients,
     unmatched: unmatched.slice(0, 10),
     analyzedAt: new Date().toISOString(),
+  };
+}
+
+// ==========================================
+// MOTORE MULTI-FASE, SEMILAVORATI & VALIDAZIONE QUANTITÀ
+// ==========================================
+
+export function parseQuantityAndUnit(quantityText: string): {
+  quantita: number;
+  unita_misura: string;
+} {
+  const raw = String(quantityText || '').trim();
+  if (!raw || /^q\.?\s*b\.?$/i.test(raw)) {
+    return { quantita: 1, unita_misura: 'q.b.' };
+  }
+  const match = raw.match(/^(\d+(?:[.,]\d+)?)\s*(.*)$/);
+  if (!match) {
+    return { quantita: 1, unita_misura: raw || 'q.b.' };
+  }
+  const num = Math.max(0.1, parseFloat(match[1].replace(',', '.')) || 1);
+  const unitRaw = (match[2] || '').trim().toLowerCase();
+  if (!unitRaw) return { quantita: num, unita_misura: 'pz' };
+  if (/^(gr|grammi|g)$/.test(unitRaw)) return { quantita: num, unita_misura: 'g' };
+  if (/^(kg|chili)$/.test(unitRaw)) return { quantita: num * 1000, unita_misura: 'g' };
+  if (/^(ml|millilitri)$/.test(unitRaw)) return { quantita: num, unita_misura: 'ml' };
+  if (/^(cl)$/.test(unitRaw)) return { quantita: num * 10, unita_misura: 'ml' };
+  if (/^(l|litri)$/.test(unitRaw)) return { quantita: num * 1000, unita_misura: 'ml' };
+  return { quantita: Math.round(num * 100) / 100, unita_misura: unitRaw };
+}
+
+export function formatQuantityAndUnit(quantita: number, unita_misura: string): string {
+  const u = (unita_misura || 'g').trim();
+  if (u === 'q.b.') return 'q.b.';
+  const rounded = Math.round(quantita * 100) / 100;
+  return `${rounded} ${u}`;
+}
+
+export function buildPlannedIngredientsFromItems(
+  items: ExtractedRecipeItem[]
+): PlannedRecipeIngredient[] {
+  const map = new Map<string, PlannedRecipeIngredient>();
+  for (const it of items) {
+    const { quantita, unita_misura } = parseQuantityAndUnit(it.quantityText);
+    const existing = map.get(it.ingredientId);
+    if (existing && existing.unit === unita_misura && unita_misura !== 'q.b.') {
+      existing.totalQuantity = Math.round((existing.totalQuantity + quantita) * 100) / 100;
+    } else if (!existing) {
+      map.set(it.ingredientId, {
+        ingredientId: it.ingredientId,
+        name: it.matchedName,
+        totalQuantity: quantita,
+        unit: unita_misura,
+        dosage: it.dosage,
+        customIngredient: it.customIngredient,
+      });
+    }
+  }
+  return Array.from(map.values());
+}
+
+/**
+ * Criterio di Accettazione 4 (Retrocompatibilità):
+ * Migra qualsiasi ricetta priva di fasi in una ricetta con "Fase 1 - Preparazione generale"
+ */
+export function buildDefaultSinglePhase(
+  items: ExtractedRecipeItem[],
+  fallbackInstructions = 'Preparazione generale e unione degli ingredienti secondo la ricetta.'
+): {
+  fasi: RecipePhase[];
+  plannedIngredients: PlannedRecipeIngredient[];
+} {
+  const plannedIngredients = buildPlannedIngredientsFromItems(items);
+  const dominantTech =
+    items.find((i) => i.dosage === 'main')?.techniqueId ||
+    items[0]?.techniqueId ||
+    'tech_raw';
+
+  const phaseId = `phase_1_default`;
+  const inputs: PhaseInput[] = plannedIngredients.map((pi, idx) => ({
+    id: `pin_${phaseId}_${pi.ingredientId}_${idx}`,
+    tipo: 'INGREDIENTE',
+    riferimento_id: pi.ingredientId,
+    label: pi.name,
+    quantita: pi.totalQuantity,
+    unita_misura: pi.unit,
+    dosage: pi.dosage,
+  }));
+
+  return {
+    plannedIngredients,
+    fasi: [
+      {
+        id: phaseId,
+        ordine: 1,
+        titolo: 'Fase 1 - Preparazione generale',
+        tecnica_id: dominantTech,
+        tempo_minuti: null,
+        temperatura: null,
+        attrezzatura: '',
+        istruzioni: fallbackInstructions,
+        output_nome: 'Semilavorato Fase 1',
+        inputs,
+      },
+    ],
+  };
+}
+
+function detectEquipmentInText(text: string): string {
+  const lower = stripAccents(text);
+  if (/\bforno a legna\b/.test(lower)) return 'Forno a legna';
+  if (/\bforno\b/.test(lower)) return 'Forno';
+  if (/\bwok\b/.test(lower)) return 'Wok';
+  if (/\bpentola a pressione\b/.test(lower)) return 'Pentola a pressione';
+  if (/\bsifone\b/.test(lower)) return 'Sifone gastronomico';
+  if (/\babbattitore\b/.test(lower)) return 'Abbattitore';
+  if (/\b(griglia|brace|barbecue)\b/.test(lower)) return 'Griglia / Brace';
+  if (/\b(casseruola|tegame|cocotte)\b/.test(lower)) return 'Casseruola';
+  if (/\bpadella\b/.test(lower)) return 'Padella';
+  if (/\bpentola\b/.test(lower)) return 'Pentola';
+  if (/\b(frullatore|mixer|bimby|cutter)\b/.test(lower)) return 'Frullatore / Mixer';
+  return '';
+}
+
+function detectTimeMinutesInText(text: string): number | null {
+  const hrMatch = text.match(/\b(\d+)\s*(?:ore|ora)\b/i);
+  if (hrMatch) return parseInt(hrMatch[1], 10) * 60;
+  const minMatch = text.match(/\b(\d+)\s*(?:minuti|min)\b/i);
+  if (minMatch) return parseInt(minMatch[1], 10);
+  return null;
+}
+
+function detectTempInText(text: string): number | null {
+  const tMatch = text.match(/\b(\d{2,3})\s*°\s*C?\b/i);
+  if (tMatch) return parseFloat(tMatch[1]);
+  return null;
+}
+
+function detectPhaseTitleAndOutput(
+  sentence: string,
+  techId: string,
+  order: number,
+  totalPhases: number
+): { titolo: string; output_nome: string } {
+  const norm = stripAccents(sentence);
+  if (/\b(soffrigg|soffritto|battuto|cipolla|aglio)\b/.test(norm) && order === 1) {
+    return { titolo: 'Base aromatica e soffritto', output_nome: 'Base soffritto' };
+  }
+  if (/\b(impast|farina|lievit)\b/.test(norm)) {
+    return { titolo: 'Preparazione impasto', output_nome: 'Impasto base' };
+  }
+  if (/\b(marin|salamoia|ceviche)\b/.test(norm)) {
+    return { titolo: 'Marinatura', output_nome: 'Base marinata' };
+  }
+  if (/\b(rosol|scott|arrost|maillard|brace|grigli)\b/.test(norm)) {
+    return { titolo: 'Rosolatura e reazione di Maillard', output_nome: 'Base rosolata' };
+  }
+  if (/\b(risott|tosta\w*\s+il\s+riso)\b/.test(norm)) {
+    return { titolo: 'Tostatura e risottatura', output_nome: 'Riso in cottura' };
+  }
+  if (/\b(bolli|less|cuoci\s+la\s+pasta|cuoci\s+gli\s+spaghetti|al\s+dente)\b/.test(norm)) {
+    return { titolo: 'Cottura in acqua bollente', output_nome: 'Base cotta al dente' };
+  }
+  if (/\b(brasat|stracotto|stuf|umido|guazzetto)\b/.test(norm)) {
+    return { titolo: 'Cottura lenta / Brasatura', output_nome: 'Fondo brasato' };
+  }
+  if (/\b(mantec|emulsion|impiatt|servi|fine\s+cottura)\b/.test(norm) || (order === totalPhases && totalPhases > 1)) {
+    return {
+      titolo: techId === 'tech_emulsion_mantecatura' ? 'Mantecatura e assemblaggio finale' : 'Finitura e impiattamento',
+      output_nome: 'Piatto finito',
+    };
+  }
+  return {
+    titolo: `Fase ${order} di lavorazione`,
+    output_nome: `Semilavorato Fase ${order}`,
+  };
+}
+
+/**
+ * Scompone automaticamente una ricetta e il suo procedimento in N fasi sequenziali con semilavorati
+ */
+export function buildAutoPhasesFromProcedure(
+  recipeText: string,
+  items: ExtractedRecipeItem[],
+  database: FlavorDatabase
+): {
+  fasi: RecipePhase[];
+  plannedIngredients: PlannedRecipeIngredient[];
+} {
+  if (items.length === 0) {
+    return {
+      plannedIngredients: [],
+      fasi: [
+        {
+          id: 'phase_1',
+          ordine: 1,
+          titolo: 'Fase 1 - Preparazione generale',
+          tecnica_id: 'tech_raw',
+          tempo_minuti: null,
+          temperatura: null,
+          attrezzatura: '',
+          istruzioni: '',
+          output_nome: 'Semilavorato Fase 1',
+          inputs: [],
+        },
+      ],
+    };
+  }
+
+  const lines = (recipeText || '')
+    .split(/\r?\n/)
+    .map((l) => l.trim())
+    .filter(Boolean);
+  const procIdx = lines.findIndex((l) =>
+    /^(procedimento|preparazione|metodo|istruzioni)\b/i.test(stripAccents(l))
+  );
+  const procRaw = procIdx >= 0 ? lines.slice(procIdx + 1).join('\n') : '';
+
+  // Estrai blocchi/frasi del procedimento
+  const rawSteps = procRaw
+    ? procRaw
+        .split(/(?:\r?\n)+|(?<=[.!?;])\s+/)
+        .map((s) => s.replace(/^\d+[.)\-:\s]+/, '').trim())
+        .filter((s) => s.length >= 12)
+    : [];
+
+  if (rawSteps.length <= 1) {
+    return buildDefaultSinglePhase(
+      items,
+      rawSteps[0] || 'Preparazione generale e cottura degli ingredienti.'
+    );
+  }
+
+  // Raggruppa fino a max 4 fasi distinte
+  const stepChunks: string[] = [];
+  if (rawSteps.length <= 4) {
+    stepChunks.push(...rawSteps);
+  } else {
+    const groupSize = Math.ceil(rawSteps.length / 4);
+    for (let i = 0; i < rawSteps.length; i += groupSize) {
+      stepChunks.push(rawSteps.slice(i, i + groupSize).join(' '));
+    }
+  }
+
+  const plannedIngredients = buildPlannedIngredientsFromItems(items);
+  const validTechIds = new Set(database.techniques.map((t) => t.id));
+
+  // Individua in quali fasi viene nominato ciascun ingrediente (per supportare anche la ripartizione!)
+  const ingMentions = new Map<string, number[]>();
+  for (const pi of plannedIngredients) {
+    const mainWord = stripAccents(pi.name.split('(')[0].split(' ')[0]);
+    const stem = mainWord.length >= 4 ? mainWord.slice(0, mainWord.length - 1) : mainWord;
+    const matchedStepIndices: number[] = [];
+    stepChunks.forEach((chunk, sIdx) => {
+      if (stem.length >= 3 && stripAccents(chunk).includes(stem)) {
+        matchedStepIndices.push(sIdx);
+      }
+    });
+    ingMentions.set(pi.ingredientId, matchedStepIndices);
+  }
+
+  // Gli ingredienti mai nominati esplicitamente nel procedimento vengono assegnati alla prima o ultima fase in base al ruolo
+  for (const pi of plannedIngredients) {
+    const list = ingMentions.get(pi.ingredientId) || [];
+    if (list.length === 0) {
+      const targetIdx = pi.dosage === 'garnish' ? stepChunks.length - 1 : 0;
+      ingMentions.set(pi.ingredientId, [targetIdx]);
+    }
+  }
+
+  const fasi: RecipePhase[] = stepChunks.map((chunk, idx) => {
+    const order = idx + 1;
+    const phaseId = `phase_${order}`;
+
+    let detectedTech = 'tech_raw';
+    for (const rule of TECHNIQUE_RULES) {
+      if (validTechIds.has(rule.techId) && rule.regex.test(chunk)) {
+        detectedTech = rule.techId;
+        break;
+      }
+    }
+
+    const { titolo, output_nome } = detectPhaseTitleAndOutput(
+      chunk,
+      detectedTech,
+      order,
+      stepChunks.length
+    );
+
+    const inputs: PhaseInput[] = [];
+
+    // Concatena automaticamente il semilavorato della fase precedente
+    if (idx > 0) {
+      const prevPhaseId = `phase_${idx}`;
+      const prevMeta = detectPhaseTitleAndOutput(
+        stepChunks[idx - 1],
+        'tech_raw',
+        idx,
+        stepChunks.length
+      );
+      inputs.push({
+        id: `pin_semi_${phaseId}_${prevPhaseId}`,
+        tipo: 'SEMILAVORATO',
+        riferimento_id: prevPhaseId,
+        label: prevMeta.output_nome,
+        quantita: 1,
+        unita_misura: 'lotto',
+      });
+    }
+
+    // Aggiungi gli ingredienti utilizzati in questa fase (ripartendo la quantità se usato in più fasi!)
+    for (const pi of plannedIngredients) {
+      const mentions = ingMentions.get(pi.ingredientId) || [];
+      if (!mentions.includes(idx)) continue;
+
+      const occurrences = mentions.length;
+      const splitQty =
+        pi.unit === 'q.b.'
+          ? 1
+          : Math.max(0.1, Math.round((pi.totalQuantity / occurrences) * 100) / 100);
+
+      inputs.push({
+        id: `pin_ing_${phaseId}_${pi.ingredientId}`,
+        tipo: 'INGREDIENTE',
+        riferimento_id: pi.ingredientId,
+        label: pi.name,
+        quantita: splitQty,
+        unita_misura: pi.unit,
+        dosage: pi.dosage,
+      });
+    }
+
+    return {
+      id: phaseId,
+      ordine: order,
+      titolo,
+      tecnica_id: detectedTech,
+      tempo_minuti: detectTimeMinutesInText(chunk),
+      temperatura: detectTempInText(chunk),
+      attrezzatura: detectEquipmentInText(chunk),
+      istruzioni: chunk,
+      output_nome,
+      inputs,
+    };
+  });
+
+  return { fasi, plannedIngredients };
+}
+
+/**
+ * Garantisce che qualsiasi analisi o ricetta salvata abbia sempre `fasi` e `plannedIngredients` validi (Retrocompatibilità)
+ */
+export function ensureRecipePhases(
+  analysis: RecipeAnalysisResult,
+  database: FlavorDatabase,
+  recipeText = ''
+): {
+  fasi: RecipePhase[];
+  plannedIngredients: PlannedRecipeIngredient[];
+} {
+  if (Array.isArray(analysis.fasi) && analysis.fasi.length > 0) {
+    const planned =
+      Array.isArray(analysis.plannedIngredients) && analysis.plannedIngredients.length > 0
+        ? analysis.plannedIngredients
+        : buildPlannedIngredientsFromItems(analysis.items);
+    return {
+      fasi: analysis.fasi.map((f, idx) => ({
+        ...f,
+        ordine: idx + 1,
+        output_nome: f.output_nome?.trim() || `Semilavorato Fase ${idx + 1}`,
+        inputs: Array.isArray(f.inputs) ? f.inputs : [],
+      })),
+      plannedIngredients: planned,
+    };
+  }
+
+  if (recipeText && recipeText.trim().length > 20) {
+    return buildAutoPhasesFromProcedure(recipeText, analysis.items, database);
+  }
+
+  return buildDefaultSinglePhase(analysis.items);
+}
+
+/**
+ * Verifica quali fasi successive utilizzano come input il semilavorato di `targetPhaseId`
+ */
+export function getDependentPhases(fasi: RecipePhase[], targetPhaseId: string): RecipePhase[] {
+  return fasi.filter((f) =>
+    f.inputs.some((inp) => inp.tipo === 'SEMILAVORATO' && inp.riferimento_id === targetPhaseId)
+  );
+}
+
+/**
+ * Prevenzione dipendenze circolari o verso fasi successive
+ */
+export function validatePhaseOrdering(fasi: RecipePhase[]): string[] {
+  const orderById = new Map(fasi.map((f, idx) => [f.id, idx + 1]));
+  const warnings: string[] = [];
+
+  fasi.forEach((f, idx) => {
+    const currOrder = idx + 1;
+    for (const inp of f.inputs) {
+      if (inp.tipo !== 'SEMILAVORATO') continue;
+      const sourceOrder = orderById.get(inp.riferimento_id);
+      if (!sourceOrder) {
+        warnings.push(
+          `La Fase ${currOrder} ("${f.titolo}") fa riferimento a un semilavorato di una fase eliminata.`
+        );
+      } else if (sourceOrder >= currOrder) {
+        warnings.push(
+          `Dipendenza non valida nella Fase ${currOrder} ("${f.titolo}"): non può usare il semilavorato della Fase ${sourceOrder} (successiva o uguale).`
+        );
+      }
+    }
+  });
+
+  return warnings;
+}
+
+/**
+ * Verifica coerenza delle quantità distribuite nelle fasi rispetto al totale previsto della ricetta
+ */
+export function computeIngredientAllocations(
+  fasi: RecipePhase[],
+  plannedIngredients: PlannedRecipeIngredient[]
+): IngredientAllocationStatus[] {
+  const plannedMap = new Map(plannedIngredients.map((p) => [p.ingredientId, p]));
+
+  // Raccogli anche eventuali ingredienti aggiunti direttamente dentro una fase
+  for (const f of fasi) {
+    for (const inp of f.inputs) {
+      if (inp.tipo === 'INGREDIENTE' && !plannedMap.has(inp.riferimento_id)) {
+        plannedMap.set(inp.riferimento_id, {
+          ingredientId: inp.riferimento_id,
+          name: inp.label,
+          totalQuantity: inp.quantita,
+          unit: inp.unita_misura || 'g',
+          dosage: inp.dosage || 'secondary',
+        });
+      }
+    }
+  }
+
+  const results: IngredientAllocationStatus[] = [];
+
+  for (const planned of plannedMap.values()) {
+    const usages: IngredientAllocationStatus['usages'] = [];
+    let assignedTotal = 0;
+
+    fasi.forEach((f, idx) => {
+      for (const inp of f.inputs) {
+        if (inp.tipo === 'INGREDIENTE' && inp.riferimento_id === planned.ingredientId) {
+          const q = Number(inp.quantita) || 0;
+          assignedTotal += q;
+          usages.push({
+            phaseId: f.id,
+            phaseOrder: idx + 1,
+            phaseTitle: f.titolo,
+            quantita: q,
+          });
+        }
+      }
+    });
+
+    assignedTotal = Math.round(assignedTotal * 100) / 100;
+    const plannedTotal = Math.round((Number(planned.totalQuantity) || 0) * 100) / 100;
+    const remaining =
+      planned.unit === 'q.b.'
+        ? usages.length > 0
+          ? 0
+          : 1
+        : Math.round((plannedTotal - assignedTotal) * 100) / 100;
+
+    let status: IngredientAllocationStatus['status'] = 'exact';
+    if (planned.unit === 'q.b.') {
+      status = usages.length > 0 ? 'exact' : 'unassigned';
+    } else if (remaining > 0.01) {
+      status = 'unassigned';
+    } else if (remaining < -0.01) {
+      status = 'exceeded';
+    }
+
+    results.push({
+      ingredientId: planned.ingredientId,
+      name: planned.name,
+      unit: planned.unit,
+      plannedTotal,
+      assignedTotal,
+      remaining,
+      status,
+      usages,
+    });
+  }
+
+  return results;
+}
+
+/**
+ * Compila l'elenco ordinato di Fasi e i Semilavorati concatenati per il motore chimico-sensoriale FlavorEngine.
+ * Se il Semilavorato della Fase A (con tecnica T_A) entra come input nella Fase B (con tecnica T_B),
+ * gli ingredienti della Fase A subiscono in cascata T_A seguita da T_B!
+ */
+export function compilePhasesToSimulationData(
+  fasi: RecipePhase[],
+  plannedIngredients: PlannedRecipeIngredient[],
+  baseDatabase: FlavorDatabase
+): {
+  items: ExtractedRecipeItem[];
+  effectiveDatabase: FlavorDatabase;
+} {
+  const orderedPhases = [...fasi].map((f, idx) => ({ ...f, ordine: idx + 1 }));
+  const phaseById = new Map(orderedPhases.map((f) => [f.id, f]));
+  const plannedMap = new Map(plannedIngredients.map((p) => [p.ingredientId, p]));
+
+  const ingMap = new Map(baseDatabase.ingredients.map((i) => [i.id, i]));
+  for (const p of plannedIngredients) {
+    if (p.customIngredient && !ingMap.has(p.ingredientId)) {
+      ingMap.set(p.ingredientId, p.customIngredient);
+    }
+  }
+  const techMap = new Map(baseDatabase.techniques.map((t) => [t.id, t]));
+  const rawTech = techMap.get('tech_raw') ?? baseDatabase.techniques[0];
+
+  // Per ogni fase, calcola la catena di tecniche successive applicate al suo output quando viene passato come SEMILAVORATO
+  function getDownstreamTechniqueChain(sourcePhaseId: string, sourceOrder: number): Technique[] {
+    const chain: Technique[] = [];
+    const visited = new Set<string>([sourcePhaseId]);
+
+    let currentIds = [sourcePhaseId];
+    for (const nextPhase of orderedPhases) {
+      if (nextPhase.ordine <= sourceOrder) continue;
+      const consumesCurrent = nextPhase.inputs.some(
+        (inp) => inp.tipo === 'SEMILAVORATO' && currentIds.includes(inp.riferimento_id)
+      );
+      if (consumesCurrent && !visited.has(nextPhase.id)) {
+        visited.add(nextPhase.id);
+        const t = techMap.get(nextPhase.tecnica_id);
+        if (t && t.id !== 'tech_raw') {
+          chain.push(t);
+        }
+        currentIds.push(nextPhase.id);
+      }
+    }
+    return chain;
+  }
+
+  const syntheticTechniques: Technique[] = [];
+  const syntheticTechIds = new Set<string>();
+  const compiledItems: ExtractedRecipeItem[] = [];
+
+  // Calcola peso massimo in grammi per dosaggio relativo delle singole quote di fase
+  let maxQty = 0;
+  for (const f of orderedPhases) {
+    for (const inp of f.inputs) {
+      if (inp.tipo === 'INGREDIENTE' && inp.unita_misura !== 'q.b.') {
+        maxQty = Math.max(maxQty, Number(inp.quantita) || 0);
+      }
+    }
+  }
+
+  orderedPhases.forEach((phase, pIdx) => {
+    const primaryTech = techMap.get(phase.tecnica_id) ?? rawTech;
+    const downstreamTechs = getDownstreamTechniqueChain(phase.id, phase.ordine);
+    const fullTechChain = [primaryTech, ...downstreamTechs].filter(
+      (t, i, arr) => i === 0 || (t.id !== 'tech_raw' && t.id !== arr[i - 1].id)
+    );
+
+    let effectiveTechId = primaryTech.id;
+
+    // Se l'ingrediente subisce più tecniche in cascata tramite semilavorato (es. Fase 1 Soffritto -> Fase 2 Brasatura)
+    if (fullTechChain.length > 1) {
+      const chainId = `tech_chain_${fullTechChain.map((t) => t.id).join('__')}`;
+      effectiveTechId = chainId;
+
+      if (!syntheticTechIds.has(chainId)) {
+        syntheticTechIds.add(chainId);
+        const chainName = fullTechChain
+          .map((t) => t.name.split(' (')[0])
+          .join(' ➔ ');
+
+        const combinedTaste: Technique['deltas']['taste_add'] = {};
+        const combinedMouthfeel: Technique['deltas']['mouthfeel_add'] = {};
+        const combinedAromaMult: Technique['deltas']['aroma_multipliers'] = {};
+        const combinedAromaAdd: Technique['deltas']['aroma_add'] = {};
+        let volShift = 0;
+        let tempShift = fullTechChain[fullTechChain.length - 1].deltas.temporal_shift || 'keep';
+
+        fullTechChain.forEach((t, stepIdx) => {
+          const factor = stepIdx === 0 ? 1.0 : 0.6; // La seconda/terza tecnica sul semilavorato agisce con fattore modulato
+          volShift += (t.deltas.volume_shift ?? 0) * factor;
+          for (const k of TASTE_KEYS) {
+            const v = t.deltas.taste_add?.[k];
+            if (v) combinedTaste[k] = Math.round(((combinedTaste[k] ?? 0) + v * factor) * 10) / 10;
+          }
+          for (const k of MOUTHFEEL_KEYS) {
+            const v = t.deltas.mouthfeel_add?.[k];
+            if (v) {
+              combinedMouthfeel[k] =
+                Math.round(((combinedMouthfeel[k] ?? 0) + v * factor) * 10) / 10;
+            }
+          }
+          for (const k of AROMA_KEYS) {
+            const m = t.deltas.aroma_multipliers?.[k];
+            if (m !== undefined) {
+              combinedAromaMult[k] =
+                Math.round(((combinedAromaMult[k] ?? 1.0) * (1 + (m - 1) * factor)) * 100) / 100;
+            }
+            const a = t.deltas.aroma_add?.[k];
+            if (a) {
+              combinedAromaAdd[k] =
+                Math.round(((combinedAromaAdd[k] ?? 0) + a * factor) * 10) / 10;
+            }
+          }
+        });
+
+        syntheticTechniques.push({
+          id: chainId,
+          name: chainName,
+          type: fullTechChain[0].type,
+          preconditions: fullTechChain[0].preconditions,
+          deltas: {
+            volume_shift: Math.round(clamp(volShift, -2, 3)),
+            temporal_shift: tempShift,
+            taste_add: combinedTaste,
+            mouthfeel_add: combinedMouthfeel,
+            aroma_multipliers: combinedAromaMult,
+            aroma_add: combinedAromaAdd,
+          },
+        });
+      }
+    }
+
+    for (const inp of phase.inputs) {
+      if (inp.tipo !== 'INGREDIENTE') continue;
+      const ing = ingMap.get(inp.riferimento_id);
+      if (!ing) continue;
+
+      const planned = plannedMap.get(ing.id);
+      let dosage: Dosage = inp.dosage || planned?.dosage || 'secondary';
+      if (
+        ing.category === 'acid' ||
+        ing.category === 'umami_condiment' ||
+        ing.category === 'herb_spice'
+      ) {
+        dosage = 'garnish';
+      } else if (maxQty > 0 && inp.unita_misura !== 'q.b.') {
+        const ratio = (Number(inp.quantita) || 0) / maxQty;
+        if (ratio >= 0.5) dosage = 'main';
+        else if (ratio >= 0.14) dosage = 'secondary';
+        else dosage = 'garnish';
+      }
+
+      const chainDesc =
+        downstreamTechs.length > 0
+          ? `Fase ${pIdx + 1} (${phase.titolo}) ➔ Semilavorato "${phase.output_nome}" ripreso nelle fasi successive`
+          : `Fase ${pIdx + 1}: ${phase.titolo}`;
+
+      compiledItems.push({
+        id: `phase_${phase.id}_ing_${inp.id}`,
+        originalText: ing.name,
+        quantityText: formatQuantityAndUnit(inp.quantita, inp.unita_misura),
+        ingredientId: ing.id,
+        matchedName: ing.name,
+        techniqueId: effectiveTechId,
+        dosage,
+        reason: chainDesc,
+        source: planned?.customIngredient ? 'ai_estimated' : 'database',
+        customIngredient: planned?.customIngredient,
+      });
+    }
+  });
+
+  if (compiledItems.length > 0 && !compiledItems.some((i) => i.dosage === 'main')) {
+    compiledItems[0].dosage = 'main';
+  }
+
+  // Costruisci il database effettivo includendo gli eventuali ingredienti custom e le tecniche concatenate dei semilavorati
+  const existingIngIds = new Set(baseDatabase.ingredients.map((i) => i.id));
+  const extraIngs = Array.from(ingMap.values()).filter((i) => !existingIngIds.has(i.id));
+
+  // Rimuovi il warning di unused import usando transformIngredient come controllo di integrità se serve
+  void transformIngredient;
+  void phaseById;
+
+  return {
+    items: compiledItems,
+    effectiveDatabase: {
+      ...baseDatabase,
+      ingredients: extraIngs.length > 0 ? [...baseDatabase.ingredients, ...extraIngs] : baseDatabase.ingredients,
+      techniques:
+        syntheticTechniques.length > 0
+          ? [...baseDatabase.techniques, ...syntheticTechniques]
+          : baseDatabase.techniques,
+    },
   };
 }
 
@@ -834,6 +1582,11 @@ export function normalizeAiRecipeResponse(
     ? raw.unmatched.map((u) => String(u).trim()).filter(Boolean)
     : [];
 
+  const defaultPhases = buildDefaultSinglePhase(
+    items,
+    String(raw.summary || 'Preparazione generale degli ingredienti estratti dall’IA.')
+  );
+
   return {
     title: String(raw.title || fallbackTitle || 'Ricetta Analizzata').trim(),
     servings: raw.servings ? String(raw.servings).trim() : null,
@@ -843,6 +1596,8 @@ export function normalizeAiRecipeResponse(
     provider: provider || null,
     model: model || null,
     items,
+    fasi: defaultPhases.fasi,
+    plannedIngredients: defaultPhases.plannedIngredients,
     unmatched,
     analyzedAt: new Date().toISOString(),
   };
@@ -864,6 +1619,33 @@ export function buildMarkdownReport(
   if (analysis.summary) {
     lines.push(`> ${analysis.summary}`);
     lines.push('');
+  }
+
+  if (Array.isArray(analysis.fasi) && analysis.fasi.length > 0) {
+    lines.push('## Fasi di Lavorazione & Flusso Semilavorati');
+    for (const f of analysis.fasi) {
+      const params: string[] = [];
+      if (f.tempo_minuti) params.push(`${f.tempo_minuti} min`);
+      if (f.temperatura) params.push(`${f.temperatura}°C`);
+      if (f.attrezzatura) params.push(f.attrezzatura);
+      const paramStr = params.length > 0 ? ` (${params.join(' • ')})` : '';
+      lines.push(`### Fase ${f.ordine}: ${f.titolo}${paramStr}`);
+      lines.push(`- **Tecnica:** \`${f.tecnica_id}\` | **Output generato:** \`[${f.output_nome}]\``);
+      if (f.inputs.length > 0) {
+        const inpStr = f.inputs
+          .map((inp) =>
+            inp.tipo === 'SEMILAVORATO'
+              ? `[Semilavorato: ${inp.label}]`
+              : `${inp.label} (${formatQuantityAndUnit(inp.quantita, inp.unita_misura)})`
+          )
+          .join(', ');
+        lines.push(`- **Input Fase:** ${inpStr}`);
+      }
+      if (f.istruzioni) {
+        lines.push(`- **Istruzioni:** ${f.istruzioni}`);
+      }
+      lines.push('');
+    }
   }
 
   lines.push('## 1. Ingredienti e Tecniche Rilevate');
@@ -1073,6 +1855,43 @@ export function openPrintableReport(
     <div class="card"><strong>Ponti Aromatici</strong><br/>${simulation.harmonyBreakdown.aromaticCoherence}/100</div>
     <div class="card"><strong>Flusso Temporale</strong><br/>${simulation.harmonyBreakdown.temporalFlow}/100</div>
   </div>
+
+  ${
+    Array.isArray(analysis.fasi) && analysis.fasi.length > 0
+      ? `<h2>Fasi di Lavorazione &amp; Flusso Semilavorati (${analysis.fasi.length} Fasi)</h2>
+      <table>
+        <thead>
+          <tr><th>Fase</th><th>Input (Ingredienti &amp; Semilavorati)</th><th>Parametri</th><th>Output Generato</th></tr>
+        </thead>
+        <tbody>
+          ${analysis.fasi
+            .map((f) => {
+              const inpList = f.inputs
+                .map((inp) =>
+                  inp.tipo === 'SEMILAVORATO'
+                    ? `[Semilavorato: ${escapeHtml(inp.label)}]`
+                    : `${escapeHtml(inp.label)} (${escapeHtml(formatQuantityAndUnit(inp.quantita, inp.unita_misura))})`
+                )
+                .join(', ');
+              const params = [
+                f.tempo_minuti ? `${f.tempo_minuti} min` : '',
+                f.temperatura ? `${f.temperatura}°C` : '',
+                f.attrezzatura ? escapeHtml(f.attrezzatura) : '',
+              ]
+                .filter(Boolean)
+                .join(' • ');
+              return `<tr>
+                <td><strong>Fase ${f.ordine}: ${escapeHtml(f.titolo)}</strong>${f.istruzioni ? `<br/><span style="color:#57534e;font-size:11px">${escapeHtml(f.istruzioni)}</span>` : ''}</td>
+                <td>${inpList || '—'}</td>
+                <td>${params || '—'}</td>
+                <td><strong>${escapeHtml(f.output_nome)}</strong></td>
+              </tr>`;
+            })
+            .join('')}
+        </tbody>
+      </table>`
+      : ''
+  }
 
   <h2>Ingredienti e Tecniche di Cottura</h2>
   <table>
