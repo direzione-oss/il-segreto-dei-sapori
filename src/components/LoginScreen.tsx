@@ -418,9 +418,21 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({ onSuccess }) => {
           </span>
         </button>
 
-        <p className="mt-5 text-center text-[11px] text-stone-500">
-          Accesso completo e supporto prioritario riservati agli abbonati e account autorizzati.
-        </p>
+        <div className="mt-6 border-t border-white/10 pt-4 text-center">
+          <p className="text-[11px] text-stone-400">
+            Per informazioni, abbonamenti e supporto:
+          </p>
+          <a
+            href="mailto:serra@serrastudio.it?subject=Richiesta%20Informazioni%20-%20Il%20Segreto%20dei%20Sapori"
+            className="mt-2 inline-flex items-center gap-1.5 rounded-xl border border-white/10 bg-white/[0.04] px-3.5 py-1.5 text-xs font-medium text-amber-300 shadow-sm transition hover:border-amber-400/40 hover:bg-amber-500/10 hover:text-amber-200"
+          >
+            <Mail className="h-3.5 w-3.5 text-amber-400" />
+            <span>serra@serrastudio.it</span>
+          </a>
+          <p className="mt-3 text-[10px] text-stone-500">
+            Accesso completo riservato agli account autorizzati e abbonati.
+          </p>
+        </div>
       </div>
     </div>
   );
