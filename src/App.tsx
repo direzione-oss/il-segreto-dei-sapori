@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { AccountModal } from './components/AccountModal';
+import { ActivationScreen } from './components/ActivationScreen';
 import { DatabaseModal } from './components/DatabaseModal';
 import { DishBuilder } from './components/DishBuilder';
 import { AppView, Header } from './components/Header';
@@ -9,7 +10,7 @@ import { PalateSimulator } from './components/PalateSimulator';
 import { RecipeAnalyzer } from './components/RecipeAnalyzer';
 import { getTrialDataset, normalizeIngredient, PRESET_RECIPES, SEED_DATABASE } from './data/seedData';
 import { simulateDish } from './engine/flavorEngine';
-import { AuthUser } from './types/auth';
+import { AuthUser, PaymentConfig } from './types/auth';
 import { DishItem, Dosage, FlavorDatabase, Ingredient, PresetRecipe, Technique } from './types/flavor';
 
 const SEED_INGREDIENT_IDS = new Set(SEED_DATABASE.ingredients.map((i) => i.id));
@@ -24,6 +25,27 @@ function buildPresetDish(preset: PresetRecipe): DishItem[] {
 export function App() {
   const [authChecked, setAuthChecked] = useState(false);
   const [currentUser, setCurrentUser] = useState<AuthUser | null>(null);
+  const [paymentConfig, setPaymentConfig] = useState<PaymentConfig>({
+    paymentUrl: 'https://www.paypal.me/StudioSerra',
+    iban: '',
+    bankBeneficiary: 'Studio Serra',
+    contactEmail: 'direzione@serrastudio.it',
+    contactPhone: '',
+    plansText: '',
+    welcomeMessage: '',
+    promoEnabled: true,
+    promoCode: 'PROVA-SAPORI',
+    promoDays: 30,
+  });
+  const [pendingSubscriberCount, setPendingSubscriberCount] = useState<number>(0);
+
+  const isUserAllowed = (u: AuthUser | null): boolean => {
+    if (!u) return false;
+    if (u.role === 'admin' || u.role === 'trial' || u.isTrial) return true;
+    if (u.status !== 'active') return false;
+    if (u.expiresAt && new Date(u.expiresAt + 'T23:59:59') < new Date()) return false;
+    return true;
+  };
 
   const isTrialUser = currentUser?.role === 'trial' || Boolean(currentUser?.isTrial);
   const trialInfo = useMemo(
@@ -42,6 +64,27 @@ export function App() {
   const [isDbOpen, setIsDbOpen] = useState(false);
   const [isAccountOpen, setIsAccountOpen] = useState(false);
 
+  const refreshProfile = async () => {
+    try {
+      const res = await fetch('/api/auth/me', { credentials: 'include' });
+      if (res.ok) {
+        const data = await res.json();
+        if (data.user) setCurrentUser(data.user);
+        if (data.paymentConfig) setPaymentConfig(data.paymentConfig);
+      }
+      const ovRes = await fetch('/api/admin/overview', { credentials: 'include' });
+      if (ovRes.ok) {
+        const ovData = await ovRes.json();
+        const pCount = (ovData.users || []).filter(
+          (u: AuthUser) => u.status === 'pending' && u.role !== 'admin'
+        ).length;
+        setPendingSubscriberCount(pCount);
+      }
+    } catch {
+      // Ignora errori temporanei
+    }
+  };
+
   // Controlla sessione attiva all'avvio
   useEffect(() => {
     let active = true;
@@ -50,6 +93,21 @@ export function App() {
       .then((data) => {
         if (!active) return;
         setCurrentUser(data?.user ?? null);
+        if (data?.paymentConfig) setPaymentConfig(data.paymentConfig);
+
+        if (data?.user?.role === 'admin') {
+          fetch('/api/admin/overview', { credentials: 'include' })
+            .then((r) => (r.ok ? r.json() : null))
+            .then((ov) => {
+              if (active && ov?.users) {
+                setPendingSubscriberCount(
+                  ov.users.filter((u: AuthUser) => u.status === 'pending' && u.role !== 'admin')
+                    .length
+                );
+              }
+            })
+            .catch(() => {});
+        }
       })
       .catch(() => {
         if (active) setCurrentUser(null);
@@ -326,7 +384,26 @@ export function App() {
   }
 
   if (!currentUser) {
-    return <LoginScreen onSuccess={(user) => setCurrentUser(user)} />;
+    return (
+      <LoginScreen
+        onSuccess={(user) => {
+          setCurrentUser(user);
+          refreshProfile();
+        }}
+      />
+    );
+  }
+
+  // Se l'account non è abilitato (pending, abbonamento scaduto o sospeso):
+  if (!isUserAllowed(currentUser)) {
+    return (
+      <ActivationScreen
+        user={currentUser}
+        paymentConfig={paymentConfig}
+        onRefreshStatus={refreshProfile}
+        onLogout={handleLogout}
+      />
+    );
   }
 
   return (
@@ -347,6 +424,7 @@ export function App() {
           ingredientCount={database.ingredients.length}
           totalIngredientCount={trialInfo.totalIngredients}
           techniqueCount={database.techniques.length}
+          pendingSubscriberCount={pendingSubscriberCount}
         />
         {isTrialUser && (
           <div className="border-b border-amber-400/20 bg-amber-500/[0.08] px-4 py-1.5 text-center text-[11px] text-amber-200">

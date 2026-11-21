@@ -35,6 +35,7 @@ interface HeaderProps {
   ingredientCount: number;
   totalIngredientCount?: number;
   techniqueCount: number;
+  pendingSubscriberCount?: number;
 }
 
 export const Header: React.FC<HeaderProps> = ({
@@ -52,6 +53,7 @@ export const Header: React.FC<HeaderProps> = ({
   ingredientCount,
   totalIngredientCount,
   techniqueCount,
+  pendingSubscriberCount,
 }) => {
   const isTrial = currentUser.role === 'trial' || Boolean(currentUser.isTrial);
   const [isPresetMenuOpen, setIsPresetMenuOpen] = useState(false);
@@ -337,6 +339,11 @@ export const Header: React.FC<HeaderProps> = ({
                 <User className="h-3.5 w-3.5 text-stone-400" />
               )}
               <span className="hidden md:inline">{currentUser.name}</span>
+              {Boolean(pendingSubscriberCount && pendingSubscriberCount > 0) && (
+                <span className="rounded-full bg-amber-400 px-1.5 py-0.2 font-code text-[10px] font-bold text-black animate-pulse">
+                  {pendingSubscriberCount} in attesa
+                </span>
+              )}
               {isTrial && (
                 <span className="rounded border border-amber-400/35 bg-amber-500/15 px-1.5 py-0.5 font-code text-[10px] font-semibold text-amber-300">
                   10%

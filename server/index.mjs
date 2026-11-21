@@ -34,6 +34,21 @@ const TRIAL_ALIASES = new Set([
   'prova',
 ]);
 
+const defaultPaymentConfig = {
+  paymentUrl: 'https://www.paypal.me/StudioSerra',
+  iban: '',
+  bankBeneficiary: 'Studio Serra',
+  contactEmail: 'direzione@serrastudio.it',
+  contactPhone: '',
+  plansText:
+    '• Abbonamento Mensile Chef & Ricerca: 49 €/mese\nAccesso completo e illimitato al Simulatore del Palato, Atlante Spezie e Analisi Ricette con Intelligenza Artificiale.\n\n• Abbonamento Annuale Laboratorio: 390 €/anno (Oltre il 30% di sconto)\nTutte le funzionalità incluse, aggiornamenti molecolari continui e supporto dedicato Studio Serra.',
+  welcomeMessage:
+    "Il tuo account è stato registrato con successo. Per abilitare l'accesso completo a Il Segreto dei Sapori (FlavorEngine), effettua il pagamento o inserisci un codice promo ed attendi l'accreditamento da parte di Studio Serra.",
+  promoEnabled: true,
+  promoCode: 'PROVA-SAPORI',
+  promoDays: 30,
+};
+
 fs.mkdirSync(DATA_DIR, { recursive: true });
 
 function loadStore() {
@@ -43,6 +58,7 @@ function loadStore() {
       users: [],
       databases: {},
       aiConfig: null,
+      paymentConfig: { ...defaultPaymentConfig },
     };
   }
   try {
@@ -56,6 +72,10 @@ function loadStore() {
       users: Array.isArray(parsed.users) ? parsed.users : [],
       databases: parsed.databases && typeof parsed.databases === 'object' ? parsed.databases : {},
       aiConfig: parsed.aiConfig && typeof parsed.aiConfig === 'object' ? parsed.aiConfig : null,
+      paymentConfig:
+        parsed.paymentConfig && typeof parsed.paymentConfig === 'object'
+          ? { ...defaultPaymentConfig, ...parsed.paymentConfig }
+          : { ...defaultPaymentConfig },
     };
   } catch (err) {
     console.error('[store] Errore lettura store.json, inizializzazione nuovo store:', err);
@@ -64,6 +84,7 @@ function loadStore() {
       users: [],
       databases: {},
       aiConfig: null,
+      paymentConfig: { ...defaultPaymentConfig },
     };
   }
 }
@@ -82,6 +103,14 @@ function seedAdminAccount() {
     let changed = false;
     if (existing.role !== 'admin') {
       existing.role = 'admin';
+      changed = true;
+    }
+    if (existing.status !== 'active') {
+      existing.status = 'active';
+      changed = true;
+    }
+    if (!existing.subscriptionPlan) {
+      existing.subscriptionPlan = 'lifetime';
       changed = true;
     }
     if (ADMIN_PASSWORD_HASH && !existing.passwordHash) {
@@ -107,7 +136,13 @@ function seedAdminAccount() {
     id: crypto.randomUUID(),
     email: ADMIN_EMAIL,
     name: ADMIN_NAME,
+    company: 'Studio Serra',
+    phone: '',
     role: 'admin',
+    status: 'active',
+    subscriptionPlan: 'lifetime',
+    expiresAt: null,
+    notes: 'Amministratore Principale di Sistema',
     passwordHash,
     createdAt: new Date().toISOString(),
     lastLoginAt: null,
@@ -130,6 +165,14 @@ function seedTrialAccount() {
       existing.isTrial = true;
       changed = true;
     }
+    if (existing.status !== 'active') {
+      existing.status = 'active';
+      changed = true;
+    }
+    if (existing.subscriptionPlan !== 'trial') {
+      existing.subscriptionPlan = 'trial';
+      changed = true;
+    }
     if (existing.dataQuotaRatio !== TRIAL_DATA_RATIO) {
       existing.dataQuotaRatio = TRIAL_DATA_RATIO;
       changed = true;
@@ -146,7 +189,12 @@ function seedTrialAccount() {
     id: crypto.randomUUID(),
     email: TRIAL_EMAIL,
     name: TRIAL_NAME,
+    company: 'Laboratorio Demo',
+    phone: '',
     role: 'trial',
+    status: 'active',
+    subscriptionPlan: 'trial',
+    expiresAt: null,
     isTrial: true,
     dataQuotaRatio: TRIAL_DATA_RATIO,
     passwordHash: null,
@@ -198,15 +246,39 @@ function verifySession(token) {
 
 function publicUser(user) {
   const isTrial = user.role === 'trial' || Boolean(user.isTrial);
+  const isAdmin = user.role === 'admin';
   return {
     id: user.id,
     email: user.email,
     name: user.name,
+    company: user.company || '',
+    phone: user.phone || '',
     role: isTrial ? 'trial' : user.role,
+    status: isAdmin ? 'active' : user.status || (isTrial ? 'active' : 'pending'),
+    expiresAt: user.expiresAt || null,
+    subscriptionPlan: user.subscriptionPlan || (isTrial ? 'trial' : isAdmin ? 'lifetime' : 'monthly'),
+    notes: user.notes || '',
     isTrial,
     dataQuotaRatio: isTrial ? Number(user.dataQuotaRatio || TRIAL_DATA_RATIO) : 1,
     createdAt: user.createdAt,
     lastLoginAt: user.lastLoginAt || null,
+    redeemedPromos: Array.isArray(user.redeemedPromos) ? user.redeemedPromos : [],
+  };
+}
+
+function sanitizePaymentConfigForClient(cfg) {
+  const c = cfg || store.paymentConfig || defaultPaymentConfig;
+  return {
+    paymentUrl: c.paymentUrl || '',
+    iban: c.iban || '',
+    bankBeneficiary: c.bankBeneficiary || 'Studio Serra',
+    contactEmail: c.contactEmail || 'direzione@serrastudio.it',
+    contactPhone: c.contactPhone || '',
+    plansText: c.plansText || defaultPaymentConfig.plansText,
+    welcomeMessage: c.welcomeMessage || defaultPaymentConfig.welcomeMessage,
+    promoEnabled: c.promoEnabled !== false,
+    promoCode: c.promoCode || 'PROVA-SAPORI',
+    promoDays: Number(c.promoDays || 30),
   };
 }
 
@@ -293,9 +365,131 @@ app.get('/api/health', (_req, res) => {
   res.json({ ok: true, service: 'il-segreto-dei-sapori', users: store.users.length });
 });
 
+// --- PAYMENT CONFIG & ACCREDITATION ---
+app.get('/api/payment-config', (_req, res) => {
+  res.json({ paymentConfig: sanitizePaymentConfigForClient(store.paymentConfig) });
+});
+
 // --- AUTH ---
 app.get('/api/auth/me', requireAuth, (req, res) => {
-  res.json({ user: publicUser(req.user) });
+  res.json({
+    user: publicUser(req.user),
+    paymentConfig: sanitizePaymentConfigForClient(store.paymentConfig),
+  });
+});
+
+app.post('/api/auth/register', async (req, res) => {
+  const name = String(req.body?.name || '').trim();
+  const company = String(req.body?.company || '').trim();
+  const email = String(req.body?.email || '').trim().toLowerCase();
+  const phone = String(req.body?.phone || '').trim();
+  const password = String(req.body?.password || '');
+  const promoCode = String(req.body?.promoCode || '').trim().toUpperCase();
+
+  if (!name || !email || !password) {
+    return res.status(400).json({ error: 'Nome, Email e Password sono obbligatori.' });
+  }
+  if (!email.includes('@')) {
+    return res.status(400).json({ error: 'Inserisci un indirizzo email valido.' });
+  }
+  if (password.length < 6) {
+    return res.status(400).json({ error: 'La password deve avere almeno 6 caratteri.' });
+  }
+
+  if (store.users.some((u) => u.email.toLowerCase() === email)) {
+    return res.status(400).json({ error: 'Questa email è già registrata. Effettua il login.' });
+  }
+
+  let status = 'pending';
+  let expiresAt = null;
+  let subscriptionPlan = 'monthly';
+  const redeemedPromos = [];
+  let notes = '';
+
+  const cfg = store.paymentConfig || defaultPaymentConfig;
+  const validPromo = String(cfg.promoCode || '').trim().toUpperCase();
+
+  if (promoCode) {
+    if (!cfg.promoEnabled || !validPromo || promoCode !== validPromo) {
+      return res.status(400).json({ error: 'Il Codice Promo inserito non è valido o è scaduto.' });
+    }
+    status = 'active';
+    const days = Number(cfg.promoDays || 30);
+    const exp = new Date();
+    exp.setDate(exp.getDate() + days);
+    expiresAt = exp.toISOString().slice(0, 10);
+    subscriptionPlan = 'promo';
+    redeemedPromos.push(validPromo);
+    notes = `Attivato con codice promo: ${validPromo} (+${days} gg)`;
+  }
+
+  const newUser = {
+    id: crypto.randomUUID(),
+    email,
+    name,
+    company,
+    phone,
+    role: 'user',
+    status,
+    expiresAt,
+    subscriptionPlan,
+    notes,
+    redeemedPromos,
+    isTrial: false,
+    dataQuotaRatio: 1,
+    passwordHash: await bcrypt.hash(password, 12),
+    createdAt: new Date().toISOString(),
+    lastLoginAt: new Date().toISOString(),
+  };
+
+  store.users.push(newUser);
+  saveStore();
+
+  setSessionCookie(req, res, newUser);
+  return res.json({
+    user: publicUser(newUser),
+    paymentConfig: sanitizePaymentConfigForClient(store.paymentConfig),
+  });
+});
+
+app.post('/api/auth/redeem-promo', requireAuth, (req, res) => {
+  const inputPromo = String(req.body?.promoCode || '').trim().toUpperCase();
+  const cfg = store.paymentConfig || defaultPaymentConfig;
+  const validPromo = String(cfg.promoCode || '').trim().toUpperCase();
+
+  if (!inputPromo || !cfg.promoEnabled || !validPromo || inputPromo !== validPromo) {
+    return res.status(400).json({ error: 'Codice Promo non valido o non più attivo.' });
+  }
+
+  if (!Array.isArray(req.user.redeemedPromos)) {
+    req.user.redeemedPromos = [];
+  }
+  if (req.user.redeemedPromos.includes(validPromo)) {
+    return res.status(400).json({ error: 'Hai già riscattato questo Codice Promo sul tuo account.' });
+  }
+
+  if (req.user.status === 'suspended') {
+    return res.status(403).json({ error: 'Il tuo account è sospeso. Contatta Studio Serra.' });
+  }
+
+  const days = Number(cfg.promoDays || 30);
+  const baseDate =
+    req.user.expiresAt && new Date(req.user.expiresAt + 'T23:59:59') > new Date()
+      ? new Date(req.user.expiresAt + 'T23:59:59')
+      : new Date();
+  baseDate.setDate(baseDate.getDate() + days);
+
+  req.user.status = 'active';
+  req.user.expiresAt = baseDate.toISOString().slice(0, 10);
+  req.user.subscriptionPlan = 'promo';
+  req.user.redeemedPromos.push(validPromo);
+  req.user.notes = (req.user.notes ? req.user.notes + ' | ' : '') + `Promo: ${validPromo} (+${days}gg)`;
+
+  saveStore();
+  return res.json({
+    user: publicUser(req.user),
+    message: `Codice Promo attivato con successo! Accesso esteso di ${days} giorni.`,
+  });
 });
 
 app.post('/api/auth/trial', (req, res) => {
@@ -303,7 +497,10 @@ app.post('/api/auth/trial', (req, res) => {
   trialUser.lastLoginAt = new Date().toISOString();
   saveStore();
   setSessionCookie(req, res, trialUser);
-  return res.json({ user: publicUser(trialUser) });
+  return res.json({
+    user: publicUser(trialUser),
+    paymentConfig: sanitizePaymentConfigForClient(store.paymentConfig),
+  });
 });
 
 app.post('/api/auth/login', async (req, res) => {
@@ -321,7 +518,10 @@ app.post('/api/auth/login', async (req, res) => {
     trialUser.lastLoginAt = new Date().toISOString();
     saveStore();
     setSessionCookie(req, res, trialUser);
-    return res.json({ user: publicUser(trialUser) });
+    return res.json({
+      user: publicUser(trialUser),
+      paymentConfig: sanitizePaymentConfigForClient(store.paymentConfig),
+    });
   }
 
   if (!password) {
@@ -353,7 +553,10 @@ app.post('/api/auth/login', async (req, res) => {
   saveStore();
   setSessionCookie(req, res, user);
 
-  return res.json({ user: publicUser(user) });
+  return res.json({
+    user: publicUser(user),
+    paymentConfig: sanitizePaymentConfigForClient(store.paymentConfig),
+  });
 });
 
 app.post('/api/auth/logout', (req, res) => {
@@ -391,7 +594,14 @@ app.post('/api/auth/change-password', requireAuth, async (req, res) => {
   return res.json({ ok: true });
 });
 
-// --- GESTIONE ACCOUNT (ADMIN) ---
+// --- GESTIONE ACCOUNT & ABBONATI (ADMIN) ---
+app.get('/api/admin/overview', requireAuth, requireAdmin, (_req, res) => {
+  res.json({
+    users: store.users.map(publicUser),
+    paymentConfig: store.paymentConfig || defaultPaymentConfig,
+  });
+});
+
 app.get('/api/admin/users', requireAuth, requireAdmin, (_req, res) => {
   res.json({ users: store.users.map(publicUser) });
 });
@@ -399,10 +609,21 @@ app.get('/api/admin/users', requireAuth, requireAdmin, (_req, res) => {
 app.post('/api/admin/users', requireAuth, requireAdmin, async (req, res) => {
   const email = String(req.body?.email || '').trim().toLowerCase();
   const name = String(req.body?.name || '').trim();
+  const company = String(req.body?.company || '').trim();
+  const phone = String(req.body?.phone || '').trim();
   const password = String(req.body?.password || '');
   const role =
     req.body?.role === 'admin' ? 'admin' : req.body?.role === 'trial' ? 'trial' : 'user';
   const isTrial = role === 'trial';
+  const status =
+    req.body?.status && ['pending', 'active', 'suspended'].includes(req.body.status)
+      ? req.body.status
+      : isTrial
+        ? 'active'
+        : 'active';
+  const expiresAt = req.body?.expiresAt ? String(req.body.expiresAt).slice(0, 10) : null;
+  const subscriptionPlan = String(req.body?.subscriptionPlan || (isTrial ? 'trial' : 'monthly'));
+  const notes = String(req.body?.notes || '');
 
   if (!email || !email.includes('@')) {
     return res.status(400).json({ error: 'Inserisci un indirizzo email valido.' });
@@ -421,7 +642,14 @@ app.post('/api/admin/users', requireAuth, requireAdmin, async (req, res) => {
     id: crypto.randomUUID(),
     email,
     name,
+    company,
+    phone,
     role,
+    status,
+    expiresAt,
+    subscriptionPlan,
+    notes,
+    redeemedPromos: [],
     isTrial,
     dataQuotaRatio: isTrial ? TRIAL_DATA_RATIO : 1,
     passwordHash: isTrial ? null : await bcrypt.hash(password, 12),
@@ -431,7 +659,62 @@ app.post('/api/admin/users', requireAuth, requireAdmin, async (req, res) => {
   store.users.push(newUser);
   saveStore();
 
-  return res.status(201).json({ user: publicUser(newUser) });
+  return res.status(201).json({ user: publicUser(newUser), users: store.users.map(publicUser) });
+});
+
+app.post('/api/admin/users/:id/update', requireAuth, requireAdmin, async (req, res) => {
+  const target = store.users.find((u) => u.id === req.params.id);
+  if (!target) {
+    return res.status(404).json({ error: 'Utente non trovato.' });
+  }
+
+  const {
+    status,
+    expiresAt,
+    subscriptionPlan,
+    notes,
+    name,
+    company,
+    phone,
+    role,
+    newPassword,
+  } = req.body || {};
+
+  if (status && ['pending', 'active', 'suspended'].includes(status)) {
+    target.status = status;
+  }
+  if (expiresAt !== undefined) {
+    target.expiresAt = expiresAt ? String(expiresAt).slice(0, 10) : null;
+  }
+  if (subscriptionPlan !== undefined) {
+    target.subscriptionPlan = String(subscriptionPlan);
+  }
+  if (notes !== undefined) target.notes = String(notes);
+  if (name !== undefined && String(name).trim()) target.name = String(name).trim();
+  if (company !== undefined) target.company = String(company).trim();
+  if (phone !== undefined) target.phone = String(phone).trim();
+  if (role && ['admin', 'user', 'trial'].includes(role)) {
+    target.role = role;
+    target.isTrial = role === 'trial';
+  }
+  if (newPassword && String(newPassword).trim().length >= 6) {
+    target.passwordHash = await bcrypt.hash(String(newPassword).trim(), 12);
+  }
+
+  saveStore();
+  return res.json({ user: publicUser(target), users: store.users.map(publicUser) });
+});
+
+app.post('/api/admin/payment-config', requireAuth, requireAdmin, (req, res) => {
+  store.paymentConfig = {
+    ...(store.paymentConfig || defaultPaymentConfig),
+    ...req.body,
+    promoCode: String(req.body?.promoCode || 'PROVA-SAPORI').trim().toUpperCase(),
+    promoDays: Math.max(1, Number(req.body?.promoDays || 30)),
+    promoEnabled: Boolean(req.body?.promoEnabled),
+  };
+  saveStore();
+  return res.json({ paymentConfig: store.paymentConfig });
 });
 
 app.patch('/api/admin/users/:id/password', requireAuth, requireAdmin, async (req, res) => {
