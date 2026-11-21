@@ -1,7 +1,8 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   AlertCircle,
   ArrowRight,
+  Bookmark,
   BookOpen,
   Check,
   CheckCircle2,
@@ -10,18 +11,23 @@ import {
   Copy,
   Cpu,
   FileText,
+  FileUp,
+  FolderHeart,
   Info,
   KeyRound,
   Link2,
   Loader2,
+  Paperclip,
   Plus,
   PlusCircle,
   Printer,
   Save,
+  Search,
   Settings2,
   Sparkles,
   Trash2,
   Wand2,
+  X,
   Zap,
 } from 'lucide-react';
 import {
@@ -36,12 +42,14 @@ import {
 import { simulateDish } from '../engine/flavorEngine';
 import {
   buildMarkdownReport,
+  buildSavedCharacteristics,
   ExtractedRecipeItem,
   normalizeAiRecipeResponse,
   openPrintableReport,
   parseRecipeLocally,
   RecipeAnalysisResult,
   SAMPLE_RECIPES,
+  SavedRecipe,
 } from '../engine/recipeParser';
 import { AuthUser } from '../types/auth';
 import {
@@ -96,6 +104,27 @@ export const RecipeAnalyzer: React.FC<RecipeAnalyzerProps> = ({
   const [savedCustomIds, setSavedCustomIds] = useState<Set<string>>(new Set());
   const [quickAddIngId, setQuickAddIngId] = useState('');
 
+  // Allegato PDF ricetta
+  const [attachedPdf, setAttachedPdf] = useState<{
+    fileName: string;
+    pages: number;
+    sizeBytes: number;
+    base64: string;
+  } | null>(null);
+  const [isReadingPdf, setIsReadingPdf] = useState(false);
+  const [isDraggingPdf, setIsDraggingPdf] = useState(false);
+  const pdfInputRef = useRef<HTMLInputElement | null>(null);
+
+  // Ricettario personale: ricette salvate con caratteristiche trovate
+  const [savedRecipes, setSavedRecipes] = useState<SavedRecipe[]>([]);
+  const [activeSavedId, setActiveSavedId] = useState<string | null>(null);
+  const [userNotes, setUserNotes] = useState('');
+  const [isSavingRecipe, setIsSavingRecipe] = useState(false);
+  const [saveFeedback, setSaveFeedback] = useState<{ type: 'ok' | 'err'; text: string } | null>(
+    null
+  );
+  const [savedSearchQuery, setSavedSearchQuery] = useState('');
+
   // Stato IA lato server + configurazione opzionale
   const [aiStatus, setAiStatus] = useState<AiStatusInfo>({
     configured: false,
@@ -119,6 +148,16 @@ export const RecipeAnalyzer: React.FC<RecipeAnalyzerProps> = ({
         if (active && data) setAiStatus(data);
       })
       .catch(() => {});
+
+    fetch('/api/recipes', { credentials: 'include' })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((data) => {
+        if (active && Array.isArray(data?.recipes)) {
+          setSavedRecipes(data.recipes);
+        }
+      })
+      .catch(() => {});
+
     return () => {
       active = false;
     };
@@ -156,6 +195,7 @@ export const RecipeAnalyzer: React.FC<RecipeAnalyzerProps> = ({
   const hasAiAvailable = aiStatus.configured || Boolean(sessionApiKey.trim());
 
   const handleLoadSample = (sample: (typeof SAMPLE_RECIPES)[number]) => {
+    setAttachedPdf(null);
     setRecipeTitle(sample.title);
     setRecipeText(sample.text);
     setErrorMsg(null);
@@ -198,10 +238,14 @@ export const RecipeAnalyzer: React.FC<RecipeAnalyzerProps> = ({
     }
   };
 
-  const handleAnalyze = async () => {
-    const text = recipeText.trim();
-    if (!text) {
-      setErrorMsg('Incolla o scrivi prima il testo della ricetta.');
+  const runRecipeAnalysis = async (
+    titleToUse: string,
+    textToUse: string,
+    pdfAttachment: typeof attachedPdf = attachedPdf
+  ) => {
+    const text = textToUse.trim();
+    if (!text && !pdfAttachment?.base64) {
+      setErrorMsg('Incolla o scrivi il testo della ricetta oppure allega un file PDF.');
       return;
     }
 
@@ -212,23 +256,34 @@ export const RecipeAnalyzer: React.FC<RecipeAnalyzerProps> = ({
     try {
       // Se l'utente ha scelto Locale o non c'è alcuna chiave IA configurata, eseguiamo subito il motore locale
       if (engineMode === 'local' || !hasAiAvailable) {
-        const localRes = parseRecipeLocally(recipeTitle, text, database);
+        const localRes = parseRecipeLocally(titleToUse, text, database);
+        if (pdfAttachment) {
+          localRes.sourcePdfName = pdfAttachment.fileName;
+          localRes.sourcePdfPages = pdfAttachment.pages;
+        }
         if (engineMode === 'auto' && !hasAiAvailable) {
-          localRes.fallbackNotice =
-            'Analisi eseguita con il Motore Locale (nessuna chiave IA configurata: puoi attivarla da "Impostazioni IA").';
+          localRes.fallbackNotice = pdfAttachment
+            ? `PDF "${pdfAttachment.fileName}" (${pdfAttachment.pages} pag.) letto e analizzato con il Motore Locale.`
+            : 'Analisi eseguita con il Motore Locale (nessuna chiave IA configurata: puoi attivarla da "Impostazioni IA").';
         }
         setAnalysis(localRes);
         return;
       }
 
-      // Altrimenti proviamo l'analisi IA via backend
+      // Altrimenti proviamo l'analisi IA via backend (con eventuale PDF allegato)
       const resp = await fetch('/api/recipe/analyze', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         credentials: 'include',
         body: JSON.stringify({
-          recipeTitle: recipeTitle.trim(),
+          recipeTitle: titleToUse.trim(),
           recipeText: text,
+          ...(pdfAttachment
+            ? {
+                pdfBase64: pdfAttachment.base64,
+                pdfFileName: pdfAttachment.fileName,
+              }
+            : {}),
           ingredientsCatalog: database.ingredients.map((i) => ({
             id: i.id,
             name: i.name,
@@ -248,11 +303,15 @@ export const RecipeAnalyzer: React.FC<RecipeAnalyzerProps> = ({
         const data = await resp.json();
         const normalized = normalizeAiRecipeResponse(
           data.result || {},
-          recipeTitle,
+          titleToUse,
           database,
           data.provider,
           data.model
         );
+        if (pdfAttachment) {
+          normalized.sourcePdfName = pdfAttachment.fileName;
+          normalized.sourcePdfPages = pdfAttachment.pages;
+        }
         if (normalized.items.length > 0) {
           setAnalysis(normalized);
           return;
@@ -261,16 +320,103 @@ export const RecipeAnalyzer: React.FC<RecipeAnalyzerProps> = ({
 
       // Fallback automatico al motore locale se l'IA risponde con errore o lista vuota
       const errData = await resp.json().catch(() => null);
-      const localFallback = parseRecipeLocally(recipeTitle, text, database);
+      const localFallback = parseRecipeLocally(titleToUse, text, database);
+      if (pdfAttachment) {
+        localFallback.sourcePdfName = pdfAttachment.fileName;
+        localFallback.sourcePdfPages = pdfAttachment.pages;
+      }
       localFallback.fallbackNotice = `IA non disponibile (${errData?.error || 'errore temporaneo'}): report generato automaticamente con il Motore Locale.`;
       setAnalysis(localFallback);
     } catch {
-      const localFallback = parseRecipeLocally(recipeTitle, text, database);
+      const localFallback = parseRecipeLocally(titleToUse, text, database);
+      if (pdfAttachment) {
+        localFallback.sourcePdfName = pdfAttachment.fileName;
+        localFallback.sourcePdfPages = pdfAttachment.pages;
+      }
       localFallback.fallbackNotice =
         'Errore di connessione al servizio IA: report generato con il Motore Locale.';
       setAnalysis(localFallback);
     } finally {
       setIsAnalyzing(false);
+    }
+  };
+
+  const handleAnalyze = () => {
+    void runRecipeAnalysis(recipeTitle, recipeText, attachedPdf);
+  };
+
+  const handleAttachPdfFile = async (file: File) => {
+    if (!file) return;
+    const isPdf =
+      file.type === 'application/pdf' || file.name.toLowerCase().endsWith('.pdf');
+    if (!isPdf) {
+      setErrorMsg('Seleziona un file in formato PDF (.pdf).');
+      return;
+    }
+    if (file.size > 15 * 1024 * 1024) {
+      setErrorMsg('Il file PDF supera la dimensione massima consentita (15 MB).');
+      return;
+    }
+
+    setErrorMsg(null);
+    setIsReadingPdf(true);
+    try {
+      const base64 = await new Promise<string>((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => {
+          const result = String(reader.result || '');
+          const commaIdx = result.indexOf(',');
+          resolve(commaIdx >= 0 ? result.slice(commaIdx + 1) : result);
+        };
+        reader.onerror = () => reject(new Error('Errore lettura file PDF.'));
+        reader.readAsDataURL(file);
+      });
+
+      const resp = await fetch('/api/recipe/parse-pdf', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify({
+          fileName: file.name,
+          pdfBase64: base64,
+        }),
+      });
+      const data = await resp.json().catch(() => ({}));
+      if (!resp.ok) {
+        setErrorMsg(data?.error || 'Impossibile estrarre il testo dal PDF.');
+        return;
+      }
+
+      const extractedText = String(data.text || '').trim();
+      const suggestedTitle = String(
+        data.suggestedTitle || file.name.replace(/\.pdf$/i, '')
+      ).trim();
+      const pages = Number(data.pages || 1);
+
+      const nextPdf = {
+        fileName: file.name,
+        pages,
+        sizeBytes: file.size,
+        base64,
+      };
+      setAttachedPdf(nextPdf);
+      setRecipeTitle(suggestedTitle);
+      setRecipeText(
+        extractedText ||
+          `[Documento PDF allegato: ${file.name} (${pages} pag.) — Nessun testo selezionabile trovato; utilizza l'analisi IA Gemini per lettura ottica del PDF]`
+      );
+
+      // Avvia automaticamente la comprensione e l'analisi degli ingredienti dal PDF
+      await runRecipeAnalysis(suggestedTitle, extractedText, nextPdf);
+    } catch (err) {
+      setErrorMsg(
+        err instanceof Error ? err.message : 'Errore durante la lettura del file PDF.'
+      );
+    } finally {
+      setIsReadingPdf(false);
+      if (pdfInputRef.current) {
+        pdfInputRef.current.value = '';
+      }
     }
   };
 
@@ -350,6 +496,131 @@ export const RecipeAnalyzer: React.FC<RecipeAnalyzerProps> = ({
     onLoadIntoSimulator(dishItemsForReport, customs);
   };
 
+  const handleSaveRecipe = async (saveAsNew = false) => {
+    if (!analysis || analysis.items.length === 0) return;
+    setIsSavingRecipe(true);
+    setSaveFeedback(null);
+    try {
+      const characteristics = buildSavedCharacteristics(simulation);
+      const payload = {
+        id: saveAsNew ? undefined : activeSavedId || undefined,
+        title: (recipeTitle.trim() || analysis.title || 'Ricetta Salvata').trim(),
+        servings: analysis.servings,
+        recipeText,
+        summary: analysis.summary,
+        chefNotes: analysis.chefNotes,
+        userNotes: userNotes.trim(),
+        engine: analysis.engine,
+        provider: analysis.provider || null,
+        model: analysis.model || null,
+        sourcePdfName: analysis.sourcePdfName || null,
+        sourcePdfPages: analysis.sourcePdfPages || null,
+        items: analysis.items,
+        characteristics,
+      };
+
+      const resp = await fetch('/api/recipes', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify({ recipe: payload }),
+      });
+      const data = await resp.json().catch(() => ({}));
+      if (!resp.ok) {
+        setSaveFeedback({
+          type: 'err',
+          text: data?.error || 'Impossibile salvare la ricetta.',
+        });
+        return;
+      }
+
+      if (Array.isArray(data.recipes)) {
+        setSavedRecipes(data.recipes);
+      }
+      if (data.recipe?.id) {
+        setActiveSavedId(data.recipe.id);
+      }
+      setSaveFeedback({
+        type: 'ok',
+        text:
+          !saveAsNew && activeSavedId
+            ? 'Ricetta e caratteristiche aggiornate nel Ricettario!'
+            : 'Ricetta salvata nel tuo Ricettario con tutte le caratteristiche trovate!',
+      });
+      setTimeout(() => setSaveFeedback(null), 4000);
+    } catch {
+      setSaveFeedback({ type: 'err', text: 'Errore di rete durante il salvataggio.' });
+    } finally {
+      setIsSavingRecipe(false);
+    }
+  };
+
+  const handleLoadSavedRecipe = (saved: SavedRecipe) => {
+    setAttachedPdf(
+      saved.sourcePdfName
+        ? {
+            fileName: saved.sourcePdfName,
+            pages: saved.sourcePdfPages || 1,
+            sizeBytes: 0,
+            base64: '',
+          }
+        : null
+    );
+    setActiveSavedId(saved.id);
+    setRecipeTitle(saved.title);
+    setRecipeText(saved.recipeText || '');
+    setUserNotes(saved.userNotes || '');
+    setSaveFeedback(null);
+    setErrorMsg(null);
+    setAnalysis({
+      title: saved.title,
+      servings: saved.servings,
+      summary: saved.summary,
+      chefNotes: saved.chefNotes || [],
+      engine: saved.engine || 'local',
+      provider: saved.provider || null,
+      model: saved.model || null,
+      sourcePdfName: saved.sourcePdfName || null,
+      sourcePdfPages: saved.sourcePdfPages || null,
+      items: saved.items || [],
+      unmatched: [],
+      analyzedAt: saved.updatedAt || saved.createdAt,
+    });
+  };
+
+  const handleDeleteSavedRecipe = async (saved: SavedRecipe) => {
+    if (!window.confirm(`Eliminare la ricetta salvata "${saved.title}" dal tuo Ricettario?`)) {
+      return;
+    }
+    try {
+      const resp = await fetch(`/api/recipes/${encodeURIComponent(saved.id)}`, {
+        method: 'DELETE',
+        credentials: 'include',
+      });
+      const data = await resp.json().catch(() => ({}));
+      if (resp.ok && Array.isArray(data.recipes)) {
+        setSavedRecipes(data.recipes);
+        if (activeSavedId === saved.id) {
+          setActiveSavedId(null);
+        }
+      }
+    } catch {
+      // Ignora errore temporaneo
+    }
+  };
+
+  const filteredSavedRecipes = useMemo(() => {
+    const q = savedSearchQuery.trim().toLowerCase();
+    if (!q) return savedRecipes;
+    return savedRecipes.filter(
+      (r) =>
+        r.title.toLowerCase().includes(q) ||
+        (r.summary && r.summary.toLowerCase().includes(q)) ||
+        (r.userNotes && r.userNotes.toLowerCase().includes(q)) ||
+        r.items.some((it) => it.matchedName.toLowerCase().includes(q))
+    );
+  }, [savedRecipes, savedSearchQuery]);
+
   const sortedIngredients = useMemo(
     () => [...database.ingredients].sort((a, b) => a.name.localeCompare(b.name, 'it')),
     [database.ingredients]
@@ -388,12 +659,12 @@ export const RecipeAnalyzer: React.FC<RecipeAnalyzerProps> = ({
       <div className="lg:col-span-5 lg:h-full lg:overflow-y-auto lg:border-r lg:border-white/[0.06] lg:py-5 lg:pr-5">
         <div className="flex flex-col gap-4">
           <div className="rounded-2xl border border-white/10 bg-[#11141a]/95 p-5 shadow-xl">
-            <div className="flex items-start justify-between gap-3">
+            <div className="flex flex-wrap items-start justify-between gap-3">
               <div>
                 <div className="flex items-center gap-2">
                   <FileText className="h-4 w-4 text-amber-400" />
                   <h2 className="text-sm font-semibold tracking-wide text-[#f6f1e7]">
-                    Incolla o Scrivi una Ricetta
+                    Incolla, Scrivi o Allega un PDF con la Ricetta
                   </h2>
                 </div>
                 <p className="mt-1 text-xs text-stone-400">
@@ -401,19 +672,140 @@ export const RecipeAnalyzer: React.FC<RecipeAnalyzerProps> = ({
                   completo dei sapori.
                 </p>
               </div>
-              <button
-                type="button"
-                onClick={() => setShowAiConfig((v) => !v)}
-                className={`inline-flex shrink-0 items-center gap-1.5 rounded-lg border px-2.5 py-1.5 text-[11px] font-medium transition ${
-                  showAiConfig || hasAiAvailable
-                    ? 'border-amber-400/35 bg-amber-500/10 text-amber-200'
-                    : 'border-white/10 bg-white/[0.03] text-stone-400 hover:text-stone-200'
-                }`}
-                title="Impostazioni motore IA"
-              >
-                <Settings2 className="h-3.5 w-3.5" />
-                <span>{hasAiAvailable ? 'IA Attiva' : 'Configura IA'}</span>
-              </button>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => pdfInputRef.current?.click()}
+                  disabled={isReadingPdf || isAnalyzing}
+                  className="inline-flex shrink-0 items-center gap-1.5 rounded-lg border border-amber-400/45 bg-amber-500/15 px-3 py-1.5 text-[11px] font-semibold text-amber-200 transition hover:bg-amber-500/25 disabled:opacity-40"
+                  title="Seleziona un file PDF con la ricetta dal tuo computer"
+                >
+                  <FileUp className="h-3.5 w-3.5 text-amber-300" />
+                  <span>Allega PDF</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setShowAiConfig((v) => !v)}
+                  className={`inline-flex shrink-0 items-center gap-1.5 rounded-lg border px-2.5 py-1.5 text-[11px] font-medium transition ${
+                    showAiConfig || hasAiAvailable
+                      ? 'border-amber-400/35 bg-amber-500/10 text-amber-200'
+                      : 'border-white/10 bg-white/[0.03] text-stone-400 hover:text-stone-200'
+                  }`}
+                  title="Impostazioni motore IA"
+                >
+                  <Settings2 className="h-3.5 w-3.5" />
+                  <span>{hasAiAvailable ? 'IA Attiva' : 'Configura IA'}</span>
+                </button>
+              </div>
+            </div>
+
+            {/* Box Allega File PDF Ricetta (in cima, Click o Drag & Drop) */}
+            <div className="mt-4">
+              <div className="mb-1.5 flex items-center justify-between">
+                <span className="text-[11px] font-semibold uppercase tracking-wider text-amber-300">
+                  📄 Carica Documento PDF Ricetta
+                </span>
+                {attachedPdf && (
+                  <button
+                    type="button"
+                    onClick={() => setAttachedPdf(null)}
+                    className="inline-flex items-center gap-1 text-[11px] text-stone-400 hover:text-rose-300"
+                  >
+                    <X className="h-3 w-3" />
+                    <span>Rimuovi PDF</span>
+                  </button>
+                )}
+              </div>
+
+              <input
+                ref={pdfInputRef}
+                type="file"
+                accept="application/pdf,.pdf"
+                className="hidden"
+                onChange={(e) => {
+                  const file = e.target.files?.[0];
+                  if (file) void handleAttachPdfFile(file);
+                }}
+              />
+
+              {attachedPdf ? (
+                <div className="flex items-center justify-between gap-3 rounded-xl border border-amber-400/40 bg-amber-500/10 px-3.5 py-2.5 text-xs">
+                  <div className="flex min-w-0 items-center gap-2.5">
+                    <Paperclip className="h-4 w-4 shrink-0 text-amber-400" />
+                    <div className="min-w-0">
+                      <div className="truncate font-semibold text-amber-100">
+                        {attachedPdf.fileName}
+                      </div>
+                      <div className="text-[11px] text-amber-200/80">
+                        {attachedPdf.pages} {attachedPdf.pages === 1 ? 'pagina' : 'pagine'} &bull;{' '}
+                        {Math.max(1, Math.round(attachedPdf.sizeBytes / 1024))} KB &bull; Ricetta
+                        estratta e pronta
+                      </div>
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => pdfInputRef.current?.click()}
+                    disabled={isReadingPdf || isAnalyzing}
+                    className="shrink-0 rounded-lg border border-amber-400/35 bg-[#0b0d11] px-2.5 py-1 text-[11px] font-medium text-amber-200 transition hover:bg-amber-500/20 disabled:opacity-40"
+                  >
+                    Cambia PDF
+                  </button>
+                </div>
+              ) : (
+                <div
+                  onDragOver={(e) => {
+                    e.preventDefault();
+                    setIsDraggingPdf(true);
+                  }}
+                  onDragLeave={() => setIsDraggingPdf(false)}
+                  onDrop={(e) => {
+                    e.preventDefault();
+                    setIsDraggingPdf(false);
+                    const file = e.dataTransfer.files?.[0];
+                    if (file) void handleAttachPdfFile(file);
+                  }}
+                  onClick={() => {
+                    if (!isReadingPdf && !isAnalyzing) pdfInputRef.current?.click();
+                  }}
+                  role="button"
+                  tabIndex={0}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter' || e.key === ' ') {
+                      e.preventDefault();
+                      pdfInputRef.current?.click();
+                    }
+                  }}
+                  className={`flex cursor-pointer items-center justify-between gap-3 rounded-xl border-2 border-dashed px-3.5 py-3.5 transition ${
+                    isDraggingPdf
+                      ? 'border-amber-400 bg-amber-500/15'
+                      : 'border-amber-400/35 bg-amber-500/[0.04] hover:border-amber-400/65 hover:bg-amber-500/10'
+                  }`}
+                >
+                  <div className="flex items-center gap-3">
+                    <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-amber-400/35 bg-amber-500/15 text-amber-300">
+                      {isReadingPdf ? (
+                        <Loader2 className="h-5 w-5 animate-spin" />
+                      ) : (
+                        <FileUp className="h-5 w-5" />
+                      )}
+                    </div>
+                    <div>
+                      <div className="text-xs font-semibold text-amber-100">
+                        {isReadingPdf
+                          ? 'Lettura e comprensione del PDF in corso...'
+                          : 'Clicca qui o trascina un file PDF con la ricetta'}
+                      </div>
+                      <div className="text-[11px] text-stone-400">
+                        Il programma legge il PDF, comprende la ricetta e analizza gli ingredienti
+                      </div>
+                    </div>
+                  </div>
+                  <span className="shrink-0 rounded-lg border border-amber-400/40 bg-amber-500/20 px-3 py-1.5 text-[11px] font-semibold text-amber-100">
+                    Sfoglia PDF
+                  </span>
+                </div>
+              )}
             </div>
 
             {/* Pannello Configurazione IA opzionale */}
@@ -598,10 +990,11 @@ export const RecipeAnalyzer: React.FC<RecipeAnalyzerProps> = ({
                 >
                   Testo della Ricetta (Ingredienti + Procedimento)
                 </label>
-                {recipeText && (
+                {(recipeText || attachedPdf) && (
                   <button
                     type="button"
                     onClick={() => {
+                      setAttachedPdf(null);
                       setRecipeTitle('');
                       setRecipeText('');
                       setErrorMsg(null);
@@ -683,6 +1076,218 @@ export const RecipeAnalyzer: React.FC<RecipeAnalyzerProps> = ({
               )}
             </button>
           </div>
+
+          {/* CARD: Il Mio Ricettario Salvato (con Caratteristiche Trovate) */}
+          <div className="rounded-2xl border border-white/10 bg-[#11141a]/95 p-5 shadow-xl">
+            <div className="flex items-center justify-between gap-2">
+              <div className="flex items-center gap-2">
+                <FolderHeart className="h-4 w-4 text-amber-400" />
+                <h2 className="text-sm font-semibold tracking-wide text-[#f6f1e7]">
+                  Le Mie Ricette Salvate
+                </h2>
+              </div>
+              <span className="rounded-full border border-amber-400/30 bg-amber-500/10 px-2.5 py-0.5 font-code text-[11px] font-semibold text-amber-200">
+                {savedRecipes.length}
+              </span>
+            </div>
+            <p className="mt-1 text-xs text-stone-400">
+              Archivio personale delle tue ricette con ingredienti, tecniche e caratteristiche
+              sensoriali calcolate.
+            </p>
+
+            {savedRecipes.length > 2 && (
+              <div className="relative mt-3">
+                <Search className="pointer-events-none absolute left-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-stone-500" />
+                <input
+                  type="text"
+                  value={savedSearchQuery}
+                  onChange={(e) => setSavedSearchQuery(e.target.value)}
+                  placeholder="Cerca tra le tue ricette salvate..."
+                  className="w-full rounded-xl border border-white/10 bg-[#0b0d11] py-2 pl-9 pr-3 text-xs text-stone-100 placeholder-stone-500 outline-none focus:border-amber-400/50"
+                />
+              </div>
+            )}
+
+            {savedRecipes.length === 0 ? (
+              <div className="mt-3 rounded-xl border border-dashed border-white/10 bg-[#0c0f14] p-4 text-center text-xs text-stone-500">
+                Nessuna ricetta salvata. Analizza una ricetta (da testo o da PDF) e clicca su{' '}
+                <strong className="text-amber-300">“Salva Ricetta”</strong> nel report per
+                archiviarla con tutte le caratteristiche trovate.
+              </div>
+            ) : filteredSavedRecipes.length === 0 ? (
+              <div className="mt-3 rounded-xl border border-white/[0.06] bg-[#0c0f14] p-4 text-center text-xs text-stone-500">
+                Nessuna ricetta salvata corrisponde alla ricerca.
+              </div>
+            ) : (
+              <div className="mt-3 max-h-[420px] space-y-2.5 overflow-y-auto pr-1">
+                {filteredSavedRecipes.map((saved) => {
+                  const isCurrent = activeSavedId === saved.id;
+                  const char = saved.characteristics;
+                  const scoreCol = getScoreColor(char?.balanceScore ?? 0);
+
+                  // Top 2 gusti percepiti
+                  const topTastes = char?.perceivedTaste
+                    ? [...TASTE_KEYS]
+                        .map((k) => ({
+                          key: k,
+                          label: TASTE_META[k].short,
+                          val: char.perceivedTaste[k] ?? 0,
+                        }))
+                        .filter((t) => t.val >= 1.5)
+                        .sort((a, b) => b.val - a.val)
+                        .slice(0, 2)
+                    : [];
+
+                  return (
+                    <div
+                      key={saved.id}
+                      className={`rounded-xl border p-3.5 transition ${
+                        isCurrent
+                          ? 'border-amber-400/50 bg-amber-500/[0.09]'
+                          : 'border-white/[0.08] bg-[#0c0f14] hover:border-white/15'
+                      }`}
+                    >
+                      <div className="flex items-start justify-between gap-2">
+                        <div className="min-w-0">
+                          <div className="flex flex-wrap items-center gap-1.5">
+                            <span className="truncate text-xs font-semibold text-stone-100">
+                              {saved.title}
+                            </span>
+                            {saved.sourcePdfName && (
+                              <span className="inline-flex items-center gap-1 rounded bg-amber-500/15 px-1.5 py-0.5 text-[10px] text-amber-300">
+                                <Paperclip className="h-2.5 w-2.5" />
+                                PDF
+                              </span>
+                            )}
+                          </div>
+                          <div className="mt-0.5 text-[10px] text-stone-500">
+                            {saved.items.length} ingr. &bull;{' '}
+                            {new Date(saved.updatedAt || saved.createdAt).toLocaleDateString(
+                              'it-IT'
+                            )}
+                          </div>
+                        </div>
+
+                        {char && (
+                          <div className="shrink-0 text-right">
+                            <span
+                              className={`rounded-lg border border-white/10 bg-white/[0.04] px-2 py-0.5 font-code text-xs font-bold ${scoreCol.text}`}
+                            >
+                              {char.balanceScore}/100
+                            </span>
+                          </div>
+                        )}
+                      </div>
+
+                      {/* Caratteristiche Sensoriali Trovate */}
+                      {char && (
+                        <div className="mt-2.5 space-y-2 border-t border-white/[0.06] pt-2">
+                          <div className="grid grid-cols-4 gap-1 text-center font-code text-[10px]">
+                            <div className="rounded bg-white/[0.03] px-1.5 py-1">
+                              <span className="block text-[9px] text-stone-500">Gusto</span>
+                              <span className="font-semibold text-stone-200">
+                                {char.harmonyBreakdown.tasteBalance}
+                              </span>
+                            </div>
+                            <div className="rounded bg-white/[0.03] px-1.5 py-1">
+                              <span className="block text-[9px] text-stone-500">Texture</span>
+                              <span className="font-semibold text-stone-200">
+                                {char.harmonyBreakdown.textureContrast}
+                              </span>
+                            </div>
+                            <div className="rounded bg-white/[0.03] px-1.5 py-1">
+                              <span className="block text-[9px] text-stone-500">Aromi</span>
+                              <span className="font-semibold text-stone-200">
+                                {char.harmonyBreakdown.aromaticCoherence}
+                              </span>
+                            </div>
+                            <div className="rounded bg-white/[0.03] px-1.5 py-1">
+                              <span className="block text-[9px] text-stone-500">Flusso</span>
+                              <span className="font-semibold text-stone-200">
+                                {char.harmonyBreakdown.temporalFlow}
+                              </span>
+                            </div>
+                          </div>
+
+                          <div className="flex flex-wrap gap-1">
+                            {topTastes.map((t) => (
+                              <span
+                                key={t.key}
+                                className="rounded border border-amber-400/25 bg-amber-500/10 px-1.5 py-0.5 text-[10px] text-amber-200"
+                              >
+                                {t.label} {t.val.toFixed(1)}
+                              </span>
+                            ))}
+                            {char.topAromas?.slice(0, 2).map((a) => (
+                              <span
+                                key={a.key}
+                                className="rounded border border-sky-400/25 bg-sky-500/10 px-1.5 py-0.5 text-[10px] text-sky-200"
+                              >
+                                {a.label} {a.value.toFixed(1)}
+                              </span>
+                            ))}
+                            {char.topBridges?.[0] && (
+                              <span className="rounded border border-emerald-400/25 bg-emerald-500/10 px-1.5 py-0.5 text-[10px] text-emerald-200">
+                                Ponte: {char.topBridges[0].nameA} ↔ {char.topBridges[0].nameB} (
+                                {char.topBridges[0].similarity}%)
+                              </span>
+                            )}
+                          </div>
+                        </div>
+                      )}
+
+                      {saved.userNotes && (
+                        <p className="mt-2 line-clamp-2 rounded-lg bg-white/[0.02] px-2.5 py-1.5 text-[11px] italic text-stone-400">
+                          “{saved.userNotes}”
+                        </p>
+                      )}
+
+                      <div className="mt-2.5 flex items-center justify-between gap-2 pt-1">
+                        <button
+                          type="button"
+                          onClick={() => handleLoadSavedRecipe(saved)}
+                          className="inline-flex items-center gap-1.5 rounded-lg bg-amber-500/20 px-2.5 py-1 text-[11px] font-semibold text-amber-200 ring-1 ring-amber-400/35 transition hover:bg-amber-500/30"
+                        >
+                          <Bookmark className="h-3 w-3" />
+                          <span>{isCurrent ? 'Aperta nel Report' : 'Apri Report'}</span>
+                        </button>
+
+                        <div className="flex items-center gap-1">
+                          <button
+                            type="button"
+                            onClick={() => {
+                              const dishItems: DishItem[] = (saved.items || []).map((it) => ({
+                                instanceId: it.id,
+                                ingredientId: it.ingredientId,
+                                techniqueId: it.techniqueId,
+                                dosage: it.dosage,
+                              }));
+                              const customs = (saved.items || [])
+                                .map((it) => it.customIngredient)
+                                .filter((ci): ci is Ingredient => Boolean(ci));
+                              onLoadIntoSimulator(dishItems, customs);
+                            }}
+                            className="rounded-lg border border-white/10 bg-white/[0.04] px-2 py-1 text-[11px] text-stone-300 transition hover:border-amber-400/40 hover:text-amber-200"
+                            title="Carica direttamente nel Simulatore Piatto"
+                          >
+                            Simulatore
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => handleDeleteSavedRecipe(saved)}
+                            className="rounded-lg p-1 text-stone-500 transition hover:bg-rose-500/10 hover:text-rose-300"
+                            title="Elimina ricetta salvata"
+                          >
+                            <Trash2 className="h-3.5 w-3.5" />
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
         </div>
       </div>
 
@@ -735,64 +1340,132 @@ export const RecipeAnalyzer: React.FC<RecipeAnalyzerProps> = ({
         ) : (
           <div className="flex flex-col gap-5 animate-fade-in">
             {/* Barra Azioni Report */}
-            <div className="flex flex-wrap items-center justify-between gap-2 rounded-2xl border border-white/10 bg-[#11141a]/95 px-4 py-3 shadow-lg">
-              <div className="flex flex-wrap items-center gap-2">
-                <span
-                  className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-0.5 text-[11px] font-medium ${
-                    analysis.engine === 'ai'
-                      ? 'border-amber-400/40 bg-amber-500/15 text-amber-200'
-                      : 'border-sky-400/35 bg-sky-500/10 text-sky-200'
+            <div className="flex flex-col gap-3 rounded-2xl border border-white/10 bg-[#11141a]/95 px-4 py-3.5 shadow-lg">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <div className="flex flex-wrap items-center gap-2">
+                  <span
+                    className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-0.5 text-[11px] font-medium ${
+                      analysis.engine === 'ai'
+                        ? 'border-amber-400/40 bg-amber-500/15 text-amber-200'
+                        : 'border-sky-400/35 bg-sky-500/10 text-sky-200'
+                    }`}
+                  >
+                    {analysis.engine === 'ai' ? (
+                      <Sparkles className="h-3 w-3" />
+                    ) : (
+                      <Cpu className="h-3 w-3" />
+                    )}
+                    <span>
+                      {analysis.engine === 'ai'
+                        ? `IA (${analysis.provider?.toUpperCase() || 'AI'}) + FlavorEngine`
+                        : 'Motore Locale + FlavorEngine'}
+                    </span>
+                  </span>
+                  <span className="font-code text-[11px] text-stone-500">
+                    {analysis.items.length} ingredienti
+                  </span>
+                  {analysis.sourcePdfName && (
+                    <span className="inline-flex items-center gap-1 rounded-full border border-amber-400/30 bg-amber-500/10 px-2.5 py-0.5 text-[11px] text-amber-200">
+                      <Paperclip className="h-3 w-3 text-amber-400" />
+                      <span className="max-w-[180px] truncate">{analysis.sourcePdfName}</span>
+                      {analysis.sourcePdfPages ? <span>({analysis.sourcePdfPages}p)</span> : null}
+                    </span>
+                  )}
+                </div>
+
+                <div className="flex flex-wrap items-center gap-2">
+                  <button
+                    type="button"
+                    disabled={isSavingRecipe || analysis.items.length === 0}
+                    onClick={() => handleSaveRecipe(false)}
+                    className="inline-flex items-center gap-1.5 rounded-lg border border-emerald-400/40 bg-emerald-500/15 px-3 py-1.5 text-xs font-semibold text-emerald-200 transition hover:bg-emerald-500/25 disabled:opacity-40"
+                    title="Salva la ricetta con gli ingredienti e tutte le caratteristiche sensoriali trovate"
+                  >
+                    {isSavingRecipe ? (
+                      <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                    ) : (
+                      <Save className="h-3.5 w-3.5 text-emerald-400" />
+                    )}
+                    <span>{activeSavedId ? 'Aggiorna Salvata' : 'Salva Ricetta'}</span>
+                  </button>
+
+                  {activeSavedId && (
+                    <button
+                      type="button"
+                      disabled={isSavingRecipe || analysis.items.length === 0}
+                      onClick={() => handleSaveRecipe(true)}
+                      className="inline-flex items-center gap-1 rounded-lg border border-white/10 bg-white/[0.04] px-2.5 py-1.5 text-xs font-medium text-stone-200 transition hover:border-emerald-400/40 hover:text-emerald-200 disabled:opacity-40"
+                      title="Salva come nuova copia nel Ricettario"
+                    >
+                      <Plus className="h-3.5 w-3.5" />
+                      <span>Salva Copia</span>
+                    </button>
+                  )}
+
+                  <button
+                    type="button"
+                    onClick={handleCopyMarkdown}
+                    className="inline-flex items-center gap-1.5 rounded-lg border border-white/10 bg-white/[0.04] px-2.5 py-1.5 text-xs font-medium text-stone-200 transition hover:border-amber-400/40 hover:text-amber-200"
+                  >
+                    {copiedMd ? (
+                      <Check className="h-3.5 w-3.5 text-emerald-400" />
+                    ) : (
+                      <Copy className="h-3.5 w-3.5 text-stone-400" />
+                    )}
+                    <span>{copiedMd ? 'Copiato!' : 'Copia MD'}</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => openPrintableReport(analysis, simulation)}
+                    className="inline-flex items-center gap-1.5 rounded-lg border border-white/10 bg-white/[0.04] px-2.5 py-1.5 text-xs font-medium text-stone-200 transition hover:border-amber-400/40 hover:text-amber-200"
+                  >
+                    <Printer className="h-3.5 w-3.5 text-amber-400" />
+                    <span>Stampa / PDF</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    disabled={analysis.items.length === 0}
+                    onClick={handleSendToSimulator}
+                    className="inline-flex items-center gap-1.5 rounded-lg bg-amber-500/20 px-3 py-1.5 text-xs font-semibold text-amber-200 ring-1 ring-amber-400/40 transition hover:bg-amber-500/30 disabled:opacity-40"
+                  >
+                    <span>Apri nel Simulatore</span>
+                    <ArrowRight className="h-3.5 w-3.5" />
+                  </button>
+                </div>
+              </div>
+
+              {/* Barra Note Personali per il salvataggio */}
+              <div className="flex flex-col gap-2 border-t border-white/[0.06] pt-2.5 sm:flex-row sm:items-center">
+                <span className="shrink-0 text-[11px] font-medium text-stone-400">
+                  Note personali ricetta:
+                </span>
+                <input
+                  type="text"
+                  value={userNotes}
+                  onChange={(e) => setUserNotes(e.target.value)}
+                  placeholder="Aggiungi una nota personale da salvare insieme alle caratteristiche della ricetta..."
+                  className="flex-1 rounded-lg border border-white/10 bg-[#0b0d11] px-3 py-1.5 text-xs text-stone-200 placeholder-stone-500 outline-none focus:border-amber-400/50"
+                />
+              </div>
+
+              {saveFeedback && (
+                <div
+                  className={`flex items-center gap-2 rounded-xl border px-3 py-2 text-xs ${
+                    saveFeedback.type === 'ok'
+                      ? 'border-emerald-500/35 bg-emerald-500/10 text-emerald-200'
+                      : 'border-rose-500/35 bg-rose-500/10 text-rose-200'
                   }`}
                 >
-                  {analysis.engine === 'ai' ? (
-                    <Sparkles className="h-3 w-3" />
+                  {saveFeedback.type === 'ok' ? (
+                    <CheckCircle2 className="h-4 w-4 shrink-0 text-emerald-400" />
                   ) : (
-                    <Cpu className="h-3 w-3" />
+                    <AlertCircle className="h-4 w-4 shrink-0 text-rose-400" />
                   )}
-                  <span>
-                    {analysis.engine === 'ai'
-                      ? `IA (${analysis.provider?.toUpperCase() || 'AI'}) + FlavorEngine`
-                      : 'Motore Locale + FlavorEngine'}
-                  </span>
-                </span>
-                <span className="font-code text-[11px] text-stone-500">
-                  {analysis.items.length} ingredienti
-                </span>
-              </div>
-
-              <div className="flex flex-wrap items-center gap-2">
-                <button
-                  type="button"
-                  onClick={handleCopyMarkdown}
-                  className="inline-flex items-center gap-1.5 rounded-lg border border-white/10 bg-white/[0.04] px-2.5 py-1.5 text-xs font-medium text-stone-200 transition hover:border-amber-400/40 hover:text-amber-200"
-                >
-                  {copiedMd ? (
-                    <Check className="h-3.5 w-3.5 text-emerald-400" />
-                  ) : (
-                    <Copy className="h-3.5 w-3.5 text-stone-400" />
-                  )}
-                  <span>{copiedMd ? 'Copiato!' : 'Copia MD'}</span>
-                </button>
-
-                <button
-                  type="button"
-                  onClick={() => openPrintableReport(analysis, simulation)}
-                  className="inline-flex items-center gap-1.5 rounded-lg border border-white/10 bg-white/[0.04] px-2.5 py-1.5 text-xs font-medium text-stone-200 transition hover:border-amber-400/40 hover:text-amber-200"
-                >
-                  <Printer className="h-3.5 w-3.5 text-amber-400" />
-                  <span>Stampa / PDF</span>
-                </button>
-
-                <button
-                  type="button"
-                  disabled={analysis.items.length === 0}
-                  onClick={handleSendToSimulator}
-                  className="inline-flex items-center gap-1.5 rounded-lg bg-amber-500/20 px-3 py-1.5 text-xs font-semibold text-amber-200 ring-1 ring-amber-400/40 transition hover:bg-amber-500/30 disabled:opacity-40"
-                >
-                  <span>Apri nel Simulatore</span>
-                  <ArrowRight className="h-3.5 w-3.5" />
-                </button>
-              </div>
+                  <span>{saveFeedback.text}</span>
+                </div>
+              )}
             </div>
 
             {analysis.fallbackNotice && (

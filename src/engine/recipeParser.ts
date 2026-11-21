@@ -37,9 +37,109 @@ export interface RecipeAnalysisResult {
   provider?: string | null;
   model?: string | null;
   fallbackNotice?: string | null;
+  sourcePdfName?: string | null;
+  sourcePdfPages?: number | null;
   items: ExtractedRecipeItem[];
   unmatched: string[];
   analyzedAt: string;
+}
+
+export interface SavedRecipeCharacteristics {
+  balanceScore: number;
+  harmonyBreakdown: {
+    tasteBalance: number;
+    textureContrast: number;
+    aromaticCoherence: number;
+    temporalFlow: number;
+  };
+  narrative: string;
+  rawTaste: DishSimulationResult['rawTaste'];
+  perceivedTaste: DishSimulationResult['perceived']['taste'];
+  rawMouthfeel: DishSimulationResult['rawMouthfeel'];
+  perceivedMouthfeel: DishSimulationResult['perceived']['mouthfeel'];
+  topAromas: { key: string; label: string; value: number }[];
+  topBridges: {
+    nameA: string;
+    nameB: string;
+    similarity: number;
+    sharedAromas: string[];
+  }[];
+  temporalCurve: {
+    phase: string;
+    label: string;
+    window: string;
+    intensity: number;
+    drivers: string[];
+  }[];
+  diagnostics: {
+    severity: 'warning' | 'info' | 'success';
+    title: string;
+    message: string;
+  }[];
+}
+
+export interface SavedRecipe {
+  id: string;
+  title: string;
+  servings: string | null;
+  recipeText: string;
+  summary: string;
+  chefNotes: string[];
+  userNotes: string;
+  engine: 'ai' | 'local';
+  provider?: string | null;
+  model?: string | null;
+  sourcePdfName?: string | null;
+  sourcePdfPages?: number | null;
+  items: ExtractedRecipeItem[];
+  characteristics: SavedRecipeCharacteristics | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export function buildSavedCharacteristics(
+  simulation: DishSimulationResult
+): SavedRecipeCharacteristics {
+  const topAromas = [...AROMA_KEYS]
+    .map((k) => ({
+      key: k,
+      label: AROMA_META[k].short,
+      value: simulation.rawAromas[k],
+    }))
+    .filter((a) => a.value >= 1.0)
+    .sort((a, b) => b.value - a.value)
+    .slice(0, 5);
+
+  const topBridges = simulation.molecularBridges.slice(0, 4).map((b) => ({
+    nameA: b.nameA.split(' (')[0],
+    nameB: b.nameB.split(' (')[0],
+    similarity: b.similarity,
+    sharedAromas: b.sharedAromas.map((s) => s.label),
+  }));
+
+  return {
+    balanceScore: simulation.balanceScore,
+    harmonyBreakdown: { ...simulation.harmonyBreakdown },
+    narrative: simulation.narrative,
+    rawTaste: { ...simulation.rawTaste },
+    perceivedTaste: { ...simulation.perceived.taste },
+    rawMouthfeel: { ...simulation.rawMouthfeel },
+    perceivedMouthfeel: { ...simulation.perceived.mouthfeel },
+    topAromas,
+    topBridges,
+    temporalCurve: simulation.temporalCurve.map((t) => ({
+      phase: t.phase,
+      label: t.label,
+      window: t.window,
+      intensity: t.intensity,
+      drivers: [...t.drivers],
+    })),
+    diagnostics: simulation.diagnostics.map((d) => ({
+      severity: d.severity,
+      title: d.title,
+      message: d.message,
+    })),
+  };
 }
 
 export interface RecipeSample {
@@ -462,17 +562,18 @@ export function parseRecipeLocally(
     }
   }
 
-  // Se l'utente ha incollato solo un paragrafo discorsivo senza elenco puntato, scansiona tutto il testo
-  if (rawMatches.length === 0) {
+  // Se l'utente ha incollato o allegato un PDF con paragrafi discorsivi o colonne unite, scansiona anche il resto del testo
+  if (rawMatches.length < 2) {
     const chunks = recipeText.split(/[,.;\n]+/).map((c) => c.trim()).filter(Boolean);
     for (const chunk of chunks) {
-      const matched = findBestDatabaseIngredient(chunk, database.ingredients);
+      const { quantityText, gramsEstimate, cleaned } = extractQuantityInfo(chunk);
+      const matched = findBestDatabaseIngredient(cleaned, database.ingredients);
       if (matched && !seenIngIds.has(matched.id)) {
         seenIngIds.add(matched.id);
         rawMatches.push({
-          originalText: chunk.slice(0, 60),
-          quantityText: 'q.b.',
-          gramsEstimate: null,
+          originalText: cleaned.slice(0, 65),
+          quantityText,
+          gramsEstimate,
           ingredient: matched,
         });
       }
@@ -507,14 +608,62 @@ export function parseRecipeLocally(
     items[0].dosage = 'main';
   }
 
+  // Comprensione automatica della ricetta (Struttura, Protagonisti, Tecniche, Tempi e Temperature)
+  const techMap = new Map(database.techniques.map((t) => [t.id, t.name]));
+  const mainItems = items.filter((i) => i.dosage === 'main').map((i) => i.matchedName.split(' (')[0]);
+  const activeTechniques = Array.from(
+    new Set(
+      items
+        .filter((i) => i.techniqueId !== 'tech_raw')
+        .map((i) => techMap.get(i.techniqueId)?.split(' (')[0] || i.techniqueId)
+    )
+  );
+  const timeMatches = recipeText.match(/\b\d+\s*(?:minuti|min|ore|ora|secondi)\b/gi) || [];
+  const tempMatches = recipeText.match(/\b\d{2,3}\s*°\s*C?\b/gi) || [];
+
+  const summary =
+    items.length > 0
+      ? `Ricetta compresa e strutturata attorno a ${mainItems.join(' e ') || items[0].matchedName} (${items.length} ingredienti rilevati)${
+          activeTechniques.length > 0
+            ? `, con trasformazioni termiche/chimiche basate su ${activeTechniques.slice(0, 3).join(', ').toLowerCase()}`
+            : ' con lavorazione prevalentemente a crudo'
+        }.`
+      : 'Nessun ingrediente del database riconosciuto automaticamente. Prova a elencare gli ingredienti uno per riga oppure attiva l’analisi IA.';
+
+  const chefNotes: string[] = [];
+  if (items.length > 0) {
+    if (activeTechniques.length > 0) {
+      chefNotes.push(
+        `Comprensione procedimento: individuate ${activeTechniques.length} tecniche di trasformazione (${activeTechniques.join(', ')}) applicate agli ingredienti estratti.`
+      );
+    } else {
+      chefNotes.push(
+        'Comprensione procedimento: nessuna cottura intensa rilevata nel testo; puoi personalizzare le tecniche di cottura di ogni ingrediente direttamente nella tabella.'
+      );
+    }
+    if (timeMatches.length > 0 || tempMatches.length > 0) {
+      const params = [...tempMatches.slice(0, 2), ...timeMatches.slice(0, 2)].join(', ');
+      chefNotes.push(
+        `Parametri tecnici rilevati nel documento: ${params}.`
+      );
+    }
+    const categories = new Set(rawMatches.map((r) => r.ingredient.category));
+    if (!categories.has('acid') && (categories.has('fat') || categories.has('dairy') || categories.has('protein_meat'))) {
+      chefNotes.push(
+        'Consiglio di bilanciamento: la ricetta presenta componenti lipidiche/proteiche senza un acido dichiarato; valuta una finitura agrumata o acida per pulire il palato.'
+      );
+    } else if (items.length >= 3) {
+      chefNotes.push(
+        `Architettura ricetta: ${items.filter((i) => i.dosage === 'main').length} protagonista, ${items.filter((i) => i.dosage === 'secondary').length} comprimari e ${items.filter((i) => i.dosage === 'garnish').length} condimenti/finiture.`
+      );
+    }
+  }
+
   return {
     title: title || 'Ricetta Analizzata',
     servings,
-    summary:
-      items.length > 0
-        ? `Rilevati ${items.length} ingredienti dal database FlavorEngine con relative tecniche di cottura e pesi sensoriali.`
-        : 'Nessun ingrediente del database riconosciuto automaticamente. Prova a elencare gli ingredienti uno per riga oppure attiva l’analisi IA.',
-    chefNotes: [],
+    summary,
+    chefNotes,
     engine: 'local',
     items,
     unmatched: unmatched.slice(0, 10),

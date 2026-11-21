@@ -5,6 +5,7 @@ import express from 'express';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { extractText, getDocumentProxy } from 'unpdf';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -57,6 +58,7 @@ function loadStore() {
       sessionSecret: process.env.SESSION_SECRET || crypto.randomBytes(32).toString('hex'),
       users: [],
       databases: {},
+      recipes: {},
       aiConfig: null,
       paymentConfig: { ...defaultPaymentConfig },
     };
@@ -71,6 +73,7 @@ function loadStore() {
         crypto.randomBytes(32).toString('hex'),
       users: Array.isArray(parsed.users) ? parsed.users : [],
       databases: parsed.databases && typeof parsed.databases === 'object' ? parsed.databases : {},
+      recipes: parsed.recipes && typeof parsed.recipes === 'object' ? parsed.recipes : {},
       aiConfig: parsed.aiConfig && typeof parsed.aiConfig === 'object' ? parsed.aiConfig : null,
       paymentConfig:
         parsed.paymentConfig && typeof parsed.paymentConfig === 'object'
@@ -83,6 +86,7 @@ function loadStore() {
       sessionSecret: process.env.SESSION_SECRET || crypto.randomBytes(32).toString('hex'),
       users: [],
       databases: {},
+      recipes: {},
       aiConfig: null,
       paymentConfig: { ...defaultPaymentConfig },
     };
@@ -336,7 +340,7 @@ function clearAttempts(key) {
 
 const app = express();
 app.set('trust proxy', 1);
-app.use(express.json({ limit: '5mb' }));
+app.use(express.json({ limit: '25mb' }));
 app.use(cookieParser());
 
 function requireAuth(req, res, next) {
@@ -778,6 +782,93 @@ app.delete('/api/database', requireAuth, (req, res) => {
   res.json({ ok: true });
 });
 
+// --- RICETTARIO PERSONALE: SALVATAGGIO RICETTE CON CARATTERISTICHE ---
+app.get('/api/recipes', requireAuth, (req, res) => {
+  if (!store.recipes || typeof store.recipes !== 'object') {
+    store.recipes = {};
+  }
+  const list = Array.isArray(store.recipes[req.user.id]) ? store.recipes[req.user.id] : [];
+  res.json({ recipes: list });
+});
+
+app.post('/api/recipes', requireAuth, (req, res) => {
+  if (!store.recipes || typeof store.recipes !== 'object') {
+    store.recipes = {};
+  }
+  const userId = req.user.id;
+  const isTrial = req.user.role === 'trial' || Boolean(req.user.isTrial);
+  const currentList = Array.isArray(store.recipes[userId]) ? store.recipes[userId] : [];
+
+  const payload = req.body?.recipe;
+  if (!payload || typeof payload !== 'object') {
+    return res.status(400).json({ error: 'Dati ricetta non validi.' });
+  }
+
+  const title = String(payload.title || '').trim();
+  const items = Array.isArray(payload.items) ? payload.items : [];
+  if (!title) {
+    return res.status(400).json({ error: 'Inserisci un titolo per salvare la ricetta.' });
+  }
+  if (items.length === 0) {
+    return res.status(400).json({ error: 'La ricetta deve contenere almeno un ingrediente.' });
+  }
+
+  const existingIdx = payload.id
+    ? currentList.findIndex((r) => r.id === String(payload.id))
+    : -1;
+
+  if (existingIdx === -1 && isTrial && currentList.length >= 5) {
+    return res.status(403).json({
+      error: "L'account di prova consente di salvare fino a 5 ricette dimostrative. Elimina una ricetta salvata o passa a un account completo.",
+    });
+  }
+
+  const now = new Date().toISOString();
+  const savedRecipe = {
+    id: existingIdx >= 0 ? currentList[existingIdx].id : crypto.randomUUID(),
+    title,
+    servings: payload.servings ? String(payload.servings).trim() : null,
+    recipeText: String(payload.recipeText || ''),
+    summary: String(payload.summary || ''),
+    chefNotes: Array.isArray(payload.chefNotes) ? payload.chefNotes.map(String) : [],
+    userNotes: String(payload.userNotes || '').trim(),
+    engine: payload.engine === 'ai' ? 'ai' : 'local',
+    provider: payload.provider ? String(payload.provider) : null,
+    model: payload.model ? String(payload.model) : null,
+    sourcePdfName: payload.sourcePdfName ? String(payload.sourcePdfName) : null,
+    sourcePdfPages: payload.sourcePdfPages ? Number(payload.sourcePdfPages) : null,
+    items,
+    characteristics:
+      payload.characteristics && typeof payload.characteristics === 'object'
+        ? payload.characteristics
+        : null,
+    createdAt: existingIdx >= 0 ? currentList[existingIdx].createdAt : now,
+    updatedAt: now,
+  };
+
+  if (existingIdx >= 0) {
+    currentList[existingIdx] = savedRecipe;
+  } else {
+    currentList.unshift(savedRecipe);
+  }
+
+  store.recipes[userId] = currentList;
+  saveStore();
+  return res.json({ ok: true, recipe: savedRecipe, recipes: currentList });
+});
+
+app.delete('/api/recipes/:id', requireAuth, (req, res) => {
+  if (!store.recipes || typeof store.recipes !== 'object') {
+    store.recipes = {};
+  }
+  const userId = req.user.id;
+  const currentList = Array.isArray(store.recipes[userId]) ? store.recipes[userId] : [];
+  const nextList = currentList.filter((r) => r.id !== req.params.id);
+  store.recipes[userId] = nextList;
+  saveStore();
+  return res.json({ ok: true, recipes: nextList });
+});
+
 // --- ANALISI RICETTE CON IA (GEMINI / OPENAI) ---
 function resolveAiSettings(overrideProvider, overrideApiKey) {
   const cleanOverrideKey = typeof overrideApiKey === 'string' ? overrideApiKey.trim() : '';
@@ -928,16 +1019,109 @@ function extractJsonFromText(text) {
   return JSON.parse(candidate.slice(firstBrace, lastBrace + 1));
 }
 
-async function callGeminiRecipeAnalysis(apiKey, model, prompt) {
+async function extractStructuredTextFromPdfBuffer(pdfBuffer, fileName = '') {
+  const uint8 = new Uint8Array(pdfBuffer);
+  let numPages = 1;
+  const pageTexts = [];
+
+  try {
+    const doc = await getDocumentProxy(uint8);
+    numPages = doc.numPages || 1;
+    for (let pageNum = 1; pageNum <= numPages; pageNum++) {
+      const page = await doc.getPage(pageNum);
+      const content = await page.getTextContent();
+      const lines = [];
+      let currentLine = [];
+      let lastY = null;
+
+      for (const item of content.items || []) {
+        if (!item || typeof item.str !== 'string') continue;
+        const y = Array.isArray(item.transform) ? item.transform[5] : null;
+        if (lastY !== null && y !== null && Math.abs(y - lastY) > 2.5) {
+          const joined = currentLine.join(' ').replace(/\s+/g, ' ').trim();
+          if (joined) lines.push(joined);
+          currentLine = [];
+        }
+        if (item.str.trim()) {
+          currentLine.push(item.str.trim());
+        }
+        if (item.hasEOL) {
+          const joined = currentLine.join(' ').replace(/\s+/g, ' ').trim();
+          if (joined) lines.push(joined);
+          currentLine = [];
+          lastY = null;
+        } else if (y !== null) {
+          lastY = y;
+        }
+      }
+      if (currentLine.length > 0) {
+        const joined = currentLine.join(' ').replace(/\s+/g, ' ').trim();
+        if (joined) lines.push(joined);
+      }
+      if (lines.length > 0) {
+        pageTexts.push(lines.join('\n'));
+      }
+    }
+  } catch (err) {
+    console.warn('[pdf] Fallback su extractText standard:', err?.message || err);
+  }
+
+  let fullText = pageTexts.join('\n\n').trim();
+  if (!fullText) {
+    const fallback = await extractText(uint8, { mergePages: true });
+    fullText = String(fallback?.text || '').trim();
+    if (fallback?.totalPages) numPages = fallback.totalPages;
+  }
+
+  // Deduce un titolo probabile dalla prima riga significativa o dal nome del file PDF
+  const cleanFileName = String(fileName || '')
+    .replace(/\.pdf$/i, '')
+    .replace(/[_-]+/g, ' ')
+    .trim();
+  const firstLines = fullText
+    .split(/\r?\n/)
+    .map((l) => l.trim())
+    .filter(Boolean);
+  let suggestedTitle = cleanFileName;
+  if (firstLines.length > 0) {
+    const candidate = firstLines[0];
+    if (
+      candidate.length >= 3 &&
+      candidate.length <= 75 &&
+      !/^(ingredienti|procedimento|preparazione|scheda\s+tecnica)/i.test(candidate)
+    ) {
+      suggestedTitle = candidate.replace(/[:\-]+$/, '').trim();
+    }
+  }
+
+  return {
+    text: fullText,
+    pages: numPages,
+    suggestedTitle: suggestedTitle || 'Ricetta da PDF',
+  };
+}
+
+async function callGeminiRecipeAnalysis(apiKey, model, prompt, pdfBase64 = '') {
   const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(
     model
   )}:generateContent?key=${encodeURIComponent(apiKey)}`;
+
+  const parts = [];
+  if (pdfBase64) {
+    parts.push({
+      inlineData: {
+        mimeType: 'application/pdf',
+        data: pdfBase64,
+      },
+    });
+  }
+  parts.push({ text: prompt });
 
   const resp = await fetch(url, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
-      contents: [{ role: 'user', parts: [{ text: prompt }] }],
+      contents: [{ role: 'user', parts }],
       generationConfig: {
         temperature: 0.2,
         responseMimeType: 'application/json',
@@ -1028,9 +1212,49 @@ app.put('/api/admin/ai-config', requireAuth, requireAdmin, (req, res) => {
   });
 });
 
+function decodePdfBase64(rawBase64) {
+  const str = String(rawBase64 || '').trim();
+  if (!str) return null;
+  const cleaned = str.replace(/^data:application\/pdf;base64,/i, '').trim();
+  const buf = Buffer.from(cleaned, 'base64');
+  if (buf.length < 8 || buf.subarray(0, 5).toString('ascii') !== '%PDF-') {
+    throw new Error('Il file caricato non è un documento PDF valido.');
+  }
+  return { buffer: buf, cleanBase64: cleaned };
+}
+
+app.post('/api/recipe/parse-pdf', requireAuth, async (req, res) => {
+  try {
+    const fileName = String(req.body?.fileName || 'ricetta.pdf').trim();
+    const decoded = decodePdfBase64(req.body?.pdfBase64);
+    if (!decoded) {
+      return res.status(400).json({ error: 'Nessun file PDF fornito.' });
+    }
+    if (decoded.buffer.length > 15 * 1024 * 1024) {
+      return res.status(400).json({ error: 'Il file PDF supera la dimensione massima di 15 MB.' });
+    }
+
+    const extracted = await extractStructuredTextFromPdfBuffer(decoded.buffer, fileName);
+    return res.json({
+      ok: true,
+      fileName,
+      pages: extracted.pages,
+      suggestedTitle: extracted.suggestedTitle,
+      text: extracted.text,
+    });
+  } catch (err) {
+    console.error('[pdf-parse] Errore lettura PDF:', err);
+    return res.status(400).json({
+      error: err instanceof Error ? err.message : 'Impossibile leggere il file PDF.',
+    });
+  }
+});
+
 app.post('/api/recipe/analyze', requireAuth, async (req, res) => {
-  const recipeText = String(req.body?.recipeText || '').trim();
-  const recipeTitle = String(req.body?.recipeTitle || '').trim();
+  let recipeText = String(req.body?.recipeText || '').trim();
+  let recipeTitle = String(req.body?.recipeTitle || '').trim();
+  const pdfFileName = String(req.body?.pdfFileName || '').trim();
+  const rawPdfBase64 = String(req.body?.pdfBase64 || '').trim();
   const ingredientsCatalog = Array.isArray(req.body?.ingredientsCatalog)
     ? req.body.ingredientsCatalog
     : [];
@@ -1040,11 +1264,32 @@ app.post('/api/recipe/analyze', requireAuth, async (req, res) => {
   const overrideProvider = req.body?.provider;
   const overrideApiKey = req.body?.apiKey;
 
-  if (!recipeText || recipeText.length < 6) {
-    return res.status(400).json({ error: 'Inserisci o incolla il testo della ricetta.' });
+  let cleanPdfBase64 = '';
+  if (rawPdfBase64) {
+    try {
+      const decoded = decodePdfBase64(rawPdfBase64);
+      if (decoded) {
+        cleanPdfBase64 = decoded.cleanBase64;
+        if (!recipeText) {
+          const extracted = await extractStructuredTextFromPdfBuffer(decoded.buffer, pdfFileName);
+          recipeText = extracted.text;
+          if (!recipeTitle && extracted.suggestedTitle) {
+            recipeTitle = extracted.suggestedTitle;
+          }
+        }
+      }
+    } catch (pdfErr) {
+      return res.status(400).json({
+        error: pdfErr instanceof Error ? pdfErr.message : 'File PDF non valido.',
+      });
+    }
   }
-  if (recipeText.length > 20000) {
-    return res.status(400).json({ error: 'Il testo della ricetta supera il limite massimo (20.000 caratteri).' });
+
+  if ((!recipeText || recipeText.length < 6) && !cleanPdfBase64) {
+    return res.status(400).json({ error: 'Inserisci il testo della ricetta o allega un file PDF.' });
+  }
+  if (recipeText.length > 35000) {
+    recipeText = recipeText.slice(0, 35000);
   }
 
   const aiCfg = resolveAiSettings(overrideProvider, overrideApiKey);
@@ -1058,14 +1303,14 @@ app.post('/api/recipe/analyze', requireAuth, async (req, res) => {
   try {
     const prompt = buildRecipeAiPrompt(
       recipeTitle,
-      recipeText,
+      recipeText || '(Leggi direttamente la ricetta dal documento PDF allegato)',
       ingredientsCatalog,
       techniquesCatalog
     );
     const parsed =
       aiCfg.provider === 'openai'
         ? await callOpenAiRecipeAnalysis(aiCfg.apiKey, aiCfg.model, prompt)
-        : await callGeminiRecipeAnalysis(aiCfg.apiKey, aiCfg.model, prompt);
+        : await callGeminiRecipeAnalysis(aiCfg.apiKey, aiCfg.model, prompt, cleanPdfBase64);
 
     return res.json({
       engine: 'ai',
