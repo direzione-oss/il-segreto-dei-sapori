@@ -106,11 +106,26 @@ export interface Technique {
   deltas: TechniqueDeltas;
 }
 
+export interface DishPhase {
+  id: string;
+  order: number;
+  title: string;
+  defaultTechniqueId: string;
+  outputName: string;
+  usesPreviousPhaseIds: string[];
+  timeMinutes?: number | null;
+  temperatureCelsius?: number | null;
+  instructions?: string;
+}
+
 export interface DishItem {
   instanceId: string;
   ingredientId: string;
   techniqueId: string;
   dosage: Dosage;
+  phaseId?: string;
+  quantity?: number;
+  unit?: string;
 }
 
 export interface PreconditionWarning {

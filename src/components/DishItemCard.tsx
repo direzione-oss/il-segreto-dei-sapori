@@ -14,6 +14,7 @@ import {
   AROMA_KEYS,
   AROMA_META,
   CATEGORY_META,
+  DishPhase,
   DOSAGE_META,
   Dosage,
   Technique,
@@ -24,18 +25,27 @@ import {
 interface DishItemCardProps {
   transformed: TransformedDishItem;
   techniques: Technique[];
+  phases?: DishPhase[];
   onChangeTechnique: (instanceId: string, techniqueId: string) => void;
   onChangeDosage: (instanceId: string, dosage: Dosage) => void;
+  onChangePhase?: (instanceId: string, phaseId: string) => void;
+  onChangeQuantity?: (instanceId: string, quantity: number, unit: string) => void;
+  onSplitToPhase?: (instanceId: string, targetPhaseId: string) => void;
   onRemove: (instanceId: string) => void;
 }
 
 const DOSAGES: Dosage[] = ['garnish', 'secondary', 'main'];
+const UNITS = ['g', 'ml', 'pz', 'cucchiai', 'q.b.'];
 
 export const DishItemCard: React.FC<DishItemCardProps> = ({
   transformed,
   techniques,
+  phases,
   onChangeTechnique,
   onChangeDosage,
+  onChangePhase,
+  onChangeQuantity,
+  onSplitToPhase,
   onRemove,
 }) => {
   const [showCompare, setShowCompare] = useState(false);
@@ -146,6 +156,86 @@ export const DishItemCard: React.FC<DishItemCardProps> = ({
           </div>
         </div>
       </div>
+
+      {/* Quantità nella Fase + Spostamento / Ripartizione tra Fasi */}
+      {(onChangeQuantity || (phases && phases.length > 0)) && (
+        <div className="mt-2.5 flex flex-wrap items-center justify-between gap-2 rounded-lg border border-white/[0.06] bg-[#0b0d11] px-2.5 py-1.5 text-[11px]">
+          {onChangeQuantity && (
+            <div className="flex items-center gap-1.5">
+              <span className="text-[10px] uppercase tracking-wider text-stone-400">Quota:</span>
+              <input
+                type="number"
+                min="0.1"
+                step="any"
+                disabled={(item.unit || 'g') === 'q.b.'}
+                value={(item.unit || 'g') === 'q.b.' ? 1 : item.quantity ?? 100}
+                onChange={(e) =>
+                  onChangeQuantity(
+                    item.instanceId,
+                    Math.max(0.1, parseFloat(e.target.value) || 0),
+                    item.unit || 'g'
+                  )
+                }
+                className="w-16 rounded border border-white/10 bg-[#13171d] px-1.5 py-0.5 font-code text-xs text-amber-200 outline-none focus:border-amber-400/50 disabled:opacity-40"
+              />
+              <select
+                value={item.unit || 'g'}
+                onChange={(e) =>
+                  onChangeQuantity(item.instanceId, item.quantity ?? 100, e.target.value)
+                }
+                className="rounded border border-white/10 bg-[#13171d] px-1.5 py-0.5 text-[11px] text-stone-300 outline-none focus:border-amber-400/50"
+              >
+                {UNITS.map((u) => (
+                  <option key={u} value={u}>
+                    {u}
+                  </option>
+                ))}
+              </select>
+            </div>
+          )}
+
+          {phases && phases.length > 0 && (
+            <div className="flex flex-wrap items-center gap-1.5">
+              {onChangePhase && (
+                <select
+                  value={item.phaseId || phases[0].id}
+                  onChange={(e) => onChangePhase(item.instanceId, e.target.value)}
+                  className="rounded border border-white/10 bg-[#13171d] px-2 py-0.5 text-[11px] text-stone-200 outline-none focus:border-amber-400/50"
+                  title="Sposta questo ingrediente in un'altra fase"
+                >
+                  {phases.map((p) => (
+                    <option key={p.id} value={p.id}>
+                      In Fase {p.order}: {p.title}
+                    </option>
+                  ))}
+                </select>
+              )}
+
+              {onSplitToPhase && phases.length > 1 && (
+                <select
+                  value=""
+                  onChange={(e) => {
+                    if (e.target.value) {
+                      onSplitToPhase(item.instanceId, e.target.value);
+                    }
+                  }}
+                  className="rounded border border-amber-400/30 bg-amber-500/10 px-2 py-0.5 text-[10px] font-medium text-amber-200 outline-none hover:bg-amber-500/20"
+                  title="Ripartisci una quota di questo ingrediente anche in un'altra fase (es. 50g in Fase 1 e 30g in Fase 3)"
+                >
+                  <option value="">+ Ripartisci in altra fase...</option>
+                  {phases
+                    .filter((p) => p.id !== (item.phaseId || phases[0].id))
+                    .map((p) => (
+                      <option key={p.id} value={p.id}>
+                        ➔ Ripartisci quota in Fase {p.order} ({p.title})
+                      </option>
+                    ))}
+                </select>
+              )}
+            </div>
+          )}
+        </div>
+      )}
 
       {/* Chemical Precondition Warning Badge */}
       {preconditionWarnings.length > 0 && (

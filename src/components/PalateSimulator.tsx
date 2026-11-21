@@ -6,9 +6,12 @@ import {
   Clock,
   Info,
   Link2,
+  PackageCheck,
   PlusCircle,
   Sparkles,
+  UtensilsCrossed,
   Waves,
+  Workflow,
   Zap,
 } from 'lucide-react';
 import {
@@ -28,6 +31,7 @@ import {
 import {
   AROMA_KEYS,
   AROMA_META,
+  DishPhase,
   DishSimulationResult,
   DOSAGE_META,
   Dosage,
@@ -35,11 +39,14 @@ import {
   MOUTHFEEL_META,
   TASTE_KEYS,
   TASTE_META,
+  Technique,
 } from '../types/flavor';
 import { FlavorSolid3D } from './FlavorSolid3D';
 
 interface PalateSimulatorProps {
   simulation: DishSimulationResult;
+  phases?: DishPhase[];
+  techniques?: Technique[];
   onApplySuggestion: (ingredientId: string, techniqueId: string, dosage: Dosage) => void;
 }
 
@@ -54,6 +61,8 @@ function getScoreColor(score: number): { stroke: string; text: string; label: st
 
 export const PalateSimulator: React.FC<PalateSimulatorProps> = ({
   simulation,
+  phases = [],
+  techniques = [],
   onApplySuggestion,
 }) => {
   const [activeTab, setActiveTab] = useState<ActiveTab>('taste');
@@ -262,6 +271,132 @@ export const PalateSimulator: React.FC<PalateSimulatorProps> = ({
           </div>
         )}
       </div>
+
+      {/* Box: Procedura per Fasi -> Composizione del Piatto Finale */}
+      {hasItems && phases.length > 0 && (
+        <div className="rounded-2xl border border-white/10 bg-[#11141a]/95 p-5 shadow-xl">
+          <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+            <div className="flex items-center gap-2">
+              <Workflow className="h-4 w-4 text-amber-400" />
+              <h2 className="text-sm font-semibold tracking-wide text-[#f6f1e7]">
+                Fasi di Lavorazione che Compongono il Piatto Finale ({phases.length}{' '}
+                {phases.length === 1 ? 'Fase' : 'Fasi'})
+              </h2>
+            </div>
+            <span className="font-code text-[10px] uppercase tracking-wider text-amber-300">
+              Flusso Semilavorati ➔ Piatto Finito
+            </span>
+          </div>
+
+          <div className="grid grid-cols-1 gap-2.5 md:grid-cols-3">
+            {phases.map((phase) => {
+              const phaseItems = simulation.items.filter(
+                (t) => (t.item.phaseId || phases[0]?.id) === phase.id
+              );
+              const techName =
+                techniques.find((t) => t.id === phase.defaultTechniqueId)?.name.split(' (')[0] ||
+                phase.defaultTechniqueId;
+              const inheritedPhases = phases.filter((p) =>
+                phase.usesPreviousPhaseIds.includes(p.id)
+              );
+
+              return (
+                <div
+                  key={phase.id}
+                  className="flex flex-col justify-between rounded-xl border border-white/[0.08] bg-[#0c0f14] p-3.5"
+                >
+                  <div>
+                    <div className="flex items-center justify-between gap-1.5">
+                      <span className="rounded bg-amber-500/20 px-2 py-0.5 font-code text-[10px] font-bold text-amber-200">
+                        FASE {phase.order}
+                      </span>
+                      {(phase.timeMinutes || phase.temperatureCelsius) && (
+                        <span className="font-code text-[10px] text-stone-400">
+                          {[
+                            phase.timeMinutes ? `${phase.timeMinutes}m` : null,
+                            phase.temperatureCelsius ? `${phase.temperatureCelsius}°C` : null,
+                          ]
+                            .filter(Boolean)
+                            .join(' · ')}
+                        </span>
+                      )}
+                    </div>
+
+                    <div className="mt-1.5 text-xs font-semibold text-stone-100">
+                      {phase.title}
+                    </div>
+                    <div className="mt-0.5 text-[11px] font-medium text-amber-300/90">
+                      {techName}
+                    </div>
+
+                    {/* Semilavorati ricevuti dalle fasi precedenti */}
+                    {inheritedPhases.length > 0 && (
+                      <div className="mt-2 flex flex-wrap gap-1">
+                        {inheritedPhases.map((ip) => (
+                          <span
+                            key={ip.id}
+                            className="inline-flex items-center gap-1 rounded border border-purple-400/35 bg-purple-500/15 px-1.5 py-0.5 text-[10px] font-medium text-purple-200"
+                          >
+                            <span>+ [{ip.outputName}]</span>
+                          </span>
+                        ))}
+                      </div>
+                    )}
+
+                    {/* Ingredienti della fase */}
+                    <div className="mt-2 space-y-1">
+                      {phaseItems.length === 0 ? (
+                        <div className="text-[10px] italic text-stone-500">
+                          Trasformazione su semilavorato
+                        </div>
+                      ) : (
+                        phaseItems.map((ti) => (
+                          <div
+                            key={ti.item.instanceId}
+                            className="flex items-center justify-between gap-1.5 rounded bg-white/[0.03] px-2 py-1 text-[11px]"
+                          >
+                            <span className="truncate text-stone-200">
+                              {ti.ingredient.name.split(' (')[0]}
+                            </span>
+                            <span className="shrink-0 font-code text-[10px] text-amber-200">
+                              {ti.item.unit === 'q.b.'
+                                ? 'q.b.'
+                                : ti.item.quantity
+                                  ? `${ti.item.quantity}${ti.item.unit || 'g'}`
+                                  : DOSAGE_META[ti.item.dosage].short}
+                            </span>
+                          </div>
+                        ))
+                      )}
+                    </div>
+                  </div>
+
+                  {/* Output generato dalla fase */}
+                  <div className="mt-3 flex items-center justify-between border-t border-white/[0.06] pt-2 text-[10px]">
+                    <span className="text-stone-500">Output:</span>
+                    <span className="inline-flex items-center gap-1 font-semibold text-purple-200">
+                      <PackageCheck className="h-3 w-3 text-purple-300" />
+                      <span>[{phase.outputName}]</span>
+                    </span>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+
+          <div className="mt-3 flex items-center justify-between rounded-xl border border-emerald-500/25 bg-emerald-500/[0.07] px-3.5 py-2 text-xs text-emerald-100">
+            <span className="inline-flex items-center gap-2 font-semibold">
+              <UtensilsCrossed className="h-3.5 w-3.5 text-emerald-300" />
+              <span>
+                Convergenza Piatto Finale: {phases.map((p) => `[${p.outputName}]`).join(' ➔ ')}
+              </span>
+            </span>
+            <span className="font-code text-[11px] font-bold text-emerald-300">
+              Armonia {simulation.balanceScore}/100
+            </span>
+          </div>
+        </div>
+      )}
 
       {/* Main Analytics Tabs Card */}
       <div className="rounded-2xl border border-white/10 bg-[#11141a]/95 p-5 shadow-xl">

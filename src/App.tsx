@@ -11,15 +11,105 @@ import { RecipeAnalyzer } from './components/RecipeAnalyzer';
 import { getTrialDataset, normalizeIngredient, PRESET_RECIPES, SEED_DATABASE } from './data/seedData';
 import { simulateDish } from './engine/flavorEngine';
 import { AuthUser, PaymentConfig } from './types/auth';
-import { DishItem, Dosage, FlavorDatabase, Ingredient, PresetRecipe, Technique } from './types/flavor';
+import {
+  DishItem,
+  DishPhase,
+  Dosage,
+  FlavorDatabase,
+  Ingredient,
+  PresetRecipe,
+  Technique,
+} from './types/flavor';
 
 const SEED_INGREDIENT_IDS = new Set(SEED_DATABASE.ingredients.map((i) => i.id));
 
-function buildPresetDish(preset: PresetRecipe): DishItem[] {
-  return preset.items.map((it, idx) => ({
-    ...it,
-    instanceId: `${preset.id}_${idx}_${Date.now()}`,
-  }));
+function buildPresetDishAndPhases(preset: PresetRecipe): {
+  items: DishItem[];
+  phases: DishPhase[];
+} {
+  const ts = Date.now();
+  const mainRaw = preset.items.filter((it) => it.dosage === 'main');
+  const secRaw = preset.items.filter((it) => it.dosage === 'secondary');
+  const garRaw = preset.items.filter((it) => it.dosage === 'garnish');
+
+  const phases: DishPhase[] = [];
+  const items: DishItem[] = [];
+
+  const p1Id = `${preset.id}_phase_1`;
+  const p1Tech = mainRaw[0]?.techniqueId || preset.items[0]?.techniqueId || 'tech_raw';
+  phases.push({
+    id: p1Id,
+    order: 1,
+    title: 'Preparazione Base & Protagonista',
+    defaultTechniqueId: p1Tech,
+    outputName: 'Semilavorato Fase 1',
+    usesPreviousPhaseIds: [],
+    timeMinutes: p1Tech === 'tech_raw' ? 5 : 12,
+    temperatureCelsius: p1Tech === 'tech_raw' ? null : 180,
+  });
+
+  for (const [idx, it] of (mainRaw.length > 0 ? mainRaw : preset.items.slice(0, 1)).entries()) {
+    items.push({
+      ...it,
+      instanceId: `${preset.id}_m_${idx}_${ts}`,
+      phaseId: p1Id,
+      quantity: 160,
+      unit: 'g',
+    });
+  }
+
+  let lastPhaseId = p1Id;
+
+  if (secRaw.length > 0) {
+    const p2Id = `${preset.id}_phase_2`;
+    const p2Tech = secRaw[0]?.techniqueId || 'tech_emulsion_mantecatura';
+    phases.push({
+      id: p2Id,
+      order: phases.length + 1,
+      title: 'Cottura Comprimari & Legame',
+      defaultTechniqueId: p2Tech,
+      outputName: 'Semilavorato Fase 2',
+      usesPreviousPhaseIds: [lastPhaseId],
+      timeMinutes: 10,
+      temperatureCelsius: p2Tech === 'tech_raw' ? null : 110,
+    });
+    for (const [idx, it] of secRaw.entries()) {
+      items.push({
+        ...it,
+        instanceId: `${preset.id}_s_${idx}_${ts}`,
+        phaseId: p2Id,
+        quantity: 80,
+        unit: 'g',
+      });
+    }
+    lastPhaseId = p2Id;
+  }
+
+  if (garRaw.length > 0) {
+    const p3Id = `${preset.id}_phase_3`;
+    const p3Tech = garRaw[0]?.techniqueId || 'tech_raw';
+    phases.push({
+      id: p3Id,
+      order: phases.length + 1,
+      title: 'Finitura, Condimento & Impiattamento',
+      defaultTechniqueId: p3Tech,
+      outputName: 'Piatto Finito',
+      usesPreviousPhaseIds: [lastPhaseId],
+      timeMinutes: 3,
+      temperatureCelsius: null,
+    });
+    for (const [idx, it] of garRaw.entries()) {
+      items.push({
+        ...it,
+        instanceId: `${preset.id}_g_${idx}_${ts}`,
+        phaseId: p3Id,
+        quantity: 15,
+        unit: 'g',
+      });
+    }
+  }
+
+  return { items, phases };
 }
 
 export function App() {
@@ -58,9 +148,14 @@ export function App() {
   const [dbLoadedForUser, setDbLoadedForUser] = useState(false);
   const skipNextSaveRef = useRef(true);
 
+  const initialPresetSetup = useMemo(() => buildPresetDishAndPhases(PRESET_RECIPES[0]), []);
   const [activeView, setActiveView] = useState<AppView>('simulator');
   const [activePresetId, setActivePresetId] = useState<string | null>(PRESET_RECIPES[0].id);
-  const [dishItems, setDishItems] = useState<DishItem[]>(() => buildPresetDish(PRESET_RECIPES[0]));
+  const [dishPhases, setDishPhases] = useState<DishPhase[]>(initialPresetSetup.phases);
+  const [activeTargetPhaseId, setActiveTargetPhaseId] = useState<string>(
+    initialPresetSetup.phases[0]?.id || 'phase_1'
+  );
+  const [dishItems, setDishItems] = useState<DishItem[]>(initialPresetSetup.items);
   const [isDbOpen, setIsDbOpen] = useState(false);
   const [isAccountOpen, setIsAccountOpen] = useState(false);
 
@@ -135,7 +230,10 @@ export function App() {
       setDatabase(subset.database);
       setActivePresetId(subset.presets[0]?.id ?? null);
       if (subset.presets[0]) {
-        setDishItems(buildPresetDish(subset.presets[0]));
+        const setup = buildPresetDishAndPhases(subset.presets[0]);
+        setDishPhases(setup.phases);
+        setActiveTargetPhaseId(setup.phases[0]?.id || 'phase_1');
+        setDishItems(setup.items);
       }
       setDbLoadedForUser(true);
       return;
@@ -219,20 +317,142 @@ export function App() {
 
   const handleLoadPreset = (preset: PresetRecipe) => {
     setActivePresetId(preset.id);
-    setDishItems(buildPresetDish(preset));
+    const setup = buildPresetDishAndPhases(preset);
+    setDishPhases(setup.phases);
+    setActiveTargetPhaseId(setup.phases[0]?.id || 'phase_1');
+    setDishItems(setup.items);
   };
 
   const handleClearDish = () => {
     setActivePresetId(null);
+    const p1Id = `phase_1_${Date.now().toString(36)}`;
+    const defaultPhases: DishPhase[] = [
+      {
+        id: p1Id,
+        order: 1,
+        title: 'Fase 1 - Preparazione generale',
+        defaultTechniqueId: 'tech_raw',
+        outputName: 'Semilavorato Fase 1',
+        usesPreviousPhaseIds: [],
+      },
+    ];
+    setDishPhases(defaultPhases);
+    setActiveTargetPhaseId(p1Id);
     setDishItems([]);
+  };
+
+  const handleAddDishPhase = () => {
+    setActivePresetId(null);
+    setDishPhases((prev) => {
+      const nextOrder = prev.length + 1;
+      const newId = `phase_${nextOrder}_${Date.now().toString(36)}`;
+      const prevPhase = prev.length > 0 ? prev[prev.length - 1] : null;
+      const newPhase: DishPhase = {
+        id: newId,
+        order: nextOrder,
+        title:
+          nextOrder === 2
+            ? 'Cottura & Trasformazione'
+            : nextOrder === 3
+              ? 'Mantecatura / Finitura'
+              : `Fase ${nextOrder} di Lavorazione`,
+        defaultTechniqueId: 'tech_raw',
+        outputName: `Semilavorato Fase ${nextOrder}`,
+        usesPreviousPhaseIds: prevPhase ? [prevPhase.id] : [],
+      };
+      setActiveTargetPhaseId(newId);
+      return [...prev, newPhase];
+    });
+  };
+
+  const handleUpdateDishPhase = (phaseId: string, patch: Partial<DishPhase>) => {
+    setDishPhases((prev) => prev.map((p) => (p.id === phaseId ? { ...p, ...patch } : p)));
+  };
+
+  const handleMoveDishPhase = (fromIdx: number, toIdx: number) => {
+    if (toIdx < 0 || toIdx >= dishPhases.length || fromIdx === toIdx) return;
+    const candidate = [...dishPhases];
+    const [moved] = candidate.splice(fromIdx, 1);
+    candidate.splice(toIdx, 0, moved);
+    const reordered = candidate.map((p, i) => ({ ...p, order: i + 1 }));
+    const orderById = new Map(reordered.map((p) => [p.id, p.order]));
+
+    for (const p of reordered) {
+      for (const depId of p.usesPreviousPhaseIds) {
+        const depOrder = orderById.get(depId);
+        if (depOrder && depOrder >= p.order) {
+          window.alert(
+            `Impossibile spostare la fase: "${p.title}" utilizza come input il semilavorato di una fase che finirebbe dopo di essa. Scollega prima il semilavorato.`
+          );
+          return;
+        }
+      }
+    }
+    setDishPhases(reordered);
+  };
+
+  const handleRemoveDishPhase = (phaseId: string) => {
+    if (dishPhases.length <= 1) return;
+    const target = dishPhases.find((p) => p.id === phaseId);
+    const dependents = dishPhases.filter((p) => p.usesPreviousPhaseIds.includes(phaseId));
+    if (dependents.length > 0 && target) {
+      const ok = window.confirm(
+        `Il semilavorato "${target.outputName}" della Fase ${target.order} è utilizzato in: ${dependents.map((d) => `Fase ${d.order}`).join(', ')}.\n\nEliminando questa fase gli ingredienti verranno spostati nella prima fase disponibile. Continuare?`
+      );
+      if (!ok) return;
+    }
+
+    const remaining = dishPhases
+      .filter((p) => p.id !== phaseId)
+      .map((p, idx) => ({
+        ...p,
+        order: idx + 1,
+        usesPreviousPhaseIds: p.usesPreviousPhaseIds.filter((id) => id !== phaseId),
+      }));
+    const fallbackPhaseId = remaining[0].id;
+    setDishPhases(remaining);
+    if (activeTargetPhaseId === phaseId) {
+      setActiveTargetPhaseId(fallbackPhaseId);
+    }
+    setDishItems((prev) =>
+      prev.map((it) => (it.phaseId === phaseId ? { ...it, phaseId: fallbackPhaseId } : it))
+    );
+  };
+
+  const handleTogglePhaseSemilavorato = (targetPhaseId: string, sourcePhaseId: string) => {
+    setDishPhases((prev) =>
+      prev.map((p) => {
+        if (p.id !== targetPhaseId) return p;
+        const exists = p.usesPreviousPhaseIds.includes(sourcePhaseId);
+        return {
+          ...p,
+          usesPreviousPhaseIds: exists
+            ? p.usesPreviousPhaseIds.filter((id) => id !== sourcePhaseId)
+            : [...p.usesPreviousPhaseIds, sourcePhaseId],
+        };
+      })
+    );
+  };
+
+  const handleApplyPhaseTechniqueToAll = (phaseId: string, techniqueId: string) => {
+    setDishItems((prev) =>
+      prev.map((it) =>
+        (it.phaseId || dishPhases[0]?.id) === phaseId ? { ...it, techniqueId } : it
+      )
+    );
   };
 
   const handleAddIngredient = (
     ingredientId: string,
-    techniqueId = 'tech_raw',
-    dosage?: Dosage
+    techniqueId?: string,
+    dosage?: Dosage,
+    phaseId?: string
   ) => {
     const ing = database.ingredients.find((i) => i.id === ingredientId);
+    const targetPhase =
+      dishPhases.find((p) => p.id === (phaseId || activeTargetPhaseId)) ?? dishPhases[0];
+    const resolvedTech = techniqueId || targetPhase?.defaultTechniqueId || 'tech_raw';
+
     const defaultDosage: Dosage =
       dosage ??
       (ing &&
@@ -245,14 +465,20 @@ export function App() {
           ? 'main'
           : 'secondary');
 
+    const defaultQty =
+      defaultDosage === 'main' ? 150 : defaultDosage === 'secondary' ? 75 : 15;
+
     setActivePresetId(null);
     setDishItems((prev) => [
       ...prev,
       {
         instanceId: `item_${ingredientId}_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
         ingredientId,
-        techniqueId,
+        techniqueId: resolvedTech,
         dosage: defaultDosage,
+        phaseId: targetPhase?.id,
+        quantity: defaultQty,
+        unit: 'g',
       },
     ]);
   };
@@ -267,6 +493,44 @@ export function App() {
     setDishItems((prev) =>
       prev.map((it) => (it.instanceId === instanceId ? { ...it, dosage } : it))
     );
+  };
+
+  const handleChangeItemPhase = (instanceId: string, phaseId: string) => {
+    setDishItems((prev) =>
+      prev.map((it) => (it.instanceId === instanceId ? { ...it, phaseId } : it))
+    );
+  };
+
+  const handleChangeItemQuantity = (instanceId: string, quantity: number, unit: string) => {
+    setDishItems((prev) =>
+      prev.map((it) => (it.instanceId === instanceId ? { ...it, quantity, unit } : it))
+    );
+  };
+
+  const handleSplitItemToPhase = (instanceId: string, targetPhaseId: string) => {
+    const source = dishItems.find((it) => it.instanceId === instanceId);
+    const targetPhase = dishPhases.find((p) => p.id === targetPhaseId);
+    if (!source || !targetPhase) return;
+
+    const totalQty = source.quantity ?? 80;
+    const firstPart = Math.max(1, Math.round(totalQty * 0.6));
+    const secondPart = Math.max(1, totalQty - firstPart);
+
+    setActivePresetId(null);
+    setDishItems((prev) => [
+      ...prev.map((it) =>
+        it.instanceId === instanceId ? { ...it, quantity: firstPart, unit: it.unit || 'g' } : it
+      ),
+      {
+        instanceId: `split_${source.ingredientId}_${Date.now()}_${Math.random().toString(36).slice(2, 5)}`,
+        ingredientId: source.ingredientId,
+        techniqueId: targetPhase.defaultTechniqueId || source.techniqueId,
+        dosage: source.dosage === 'main' ? 'secondary' : source.dosage,
+        phaseId: targetPhaseId,
+        quantity: secondPart,
+        unit: source.unit || 'g',
+      },
+    ]);
   };
 
   const handleRemoveItem = (instanceId: string) => {
@@ -366,12 +630,20 @@ export function App() {
       });
     }
     setActivePresetId(null);
-    setDishItems(
-      items.map((it, idx) => ({
-        ...it,
-        instanceId: `from_recipe_${idx}_${Date.now()}`,
-      }))
-    );
+    const setup = buildPresetDishAndPhases({
+      id: `from_recipe_${Date.now()}`,
+      name: 'Ricetta Analizzata',
+      subtitle: '',
+      description: '',
+      items: items.map(({ ingredientId, techniqueId, dosage }) => ({
+        ingredientId,
+        techniqueId,
+        dosage,
+      })),
+    });
+    setDishPhases(setup.phases);
+    setActiveTargetPhaseId(setup.phases[0]?.id || 'phase_1');
+    setDishItems(setup.items);
     setActiveView('simulator');
   };
 
@@ -453,15 +725,27 @@ export function App() {
           />
         ) : (
           <div className="grid grid-cols-1 gap-6 lg:h-full lg:grid-cols-12 lg:gap-0">
-            {/* Colonna Sinistra: Costruttore del Piatto (scroll indipendente) */}
+            {/* Colonna Sinistra: Costruttore del Piatto per Fasi (scroll indipendente) */}
             <div className="lg:col-span-5 lg:h-full lg:overflow-y-auto lg:border-r lg:border-white/[0.06] lg:py-5 lg:pr-5">
               <DishBuilder
                 ingredients={database.ingredients}
                 techniques={database.techniques}
+                phases={dishPhases}
+                activeTargetPhaseId={activeTargetPhaseId}
+                onSelectTargetPhase={setActiveTargetPhaseId}
+                onAddPhase={handleAddDishPhase}
+                onUpdatePhase={handleUpdateDishPhase}
+                onMovePhase={handleMoveDishPhase}
+                onRemovePhase={handleRemoveDishPhase}
+                onTogglePhaseSemilavorato={handleTogglePhaseSemilavorato}
+                onApplyPhaseTechniqueToAll={handleApplyPhaseTechniqueToAll}
                 transformedItems={simulation.items}
                 onAddIngredient={handleAddIngredient}
                 onChangeTechnique={handleChangeTechnique}
                 onChangeDosage={handleChangeDosage}
+                onChangeItemPhase={handleChangeItemPhase}
+                onChangeItemQuantity={handleChangeItemQuantity}
+                onSplitItemToPhase={handleSplitItemToPhase}
                 onRemoveItem={handleRemoveItem}
               />
             </div>
@@ -470,6 +754,8 @@ export function App() {
             <div className="lg:col-span-7 lg:h-full lg:overflow-y-auto lg:py-5 lg:pl-5">
               <PalateSimulator
                 simulation={simulation}
+                phases={dishPhases}
+                techniques={database.techniques}
                 onApplySuggestion={handleAddIngredient}
               />
             </div>
