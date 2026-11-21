@@ -2485,3 +2485,71 @@ export const PRESET_RECIPES: PresetRecipe[] = [
     ],
   },
 ];
+
+/**
+ * Restituisce il sottoinsieme ridotto (default 10%) di ingredienti e ricette test per l'Account di Prova
+ */
+export function getTrialDataset(ratio = 0.1): {
+  database: FlavorDatabase;
+  presets: PresetRecipe[];
+  maxIngredients: number;
+  totalIngredients: number;
+  totalPresets: number;
+} {
+  const safeRatio = clamp(ratio, 0.05, 1);
+  const totalIngredients = SEED_DATABASE.ingredients.length;
+  const totalPresets = PRESET_RECIPES.length;
+
+  const maxIngredients = Math.max(1, Math.round(totalIngredients * safeRatio));
+  const maxPresets = Math.max(1, Math.round(totalPresets * safeRatio));
+
+  const trialPresets = PRESET_RECIPES.slice(0, maxPresets);
+
+  // Garantisce che gli ingredienti usati dalle ricette test del 10% (e dalla Carbonara d'esempio) siano inclusi nel 10%
+  const priorityIds = new Set<string>();
+  for (const preset of trialPresets) {
+    for (const item of preset.items) {
+      priorityIds.add(item.ingredientId);
+    }
+  }
+  for (const id of [
+    'ing_pasta_semolina',
+    'ing_pork_guanciale',
+    'ing_egg_yolk',
+    'ing_pecorino',
+    'ing_black_pepper',
+    'ing_evoo',
+    'ing_apple_vinegar',
+  ]) {
+    priorityIds.add(id);
+  }
+
+  const selected: Ingredient[] = [];
+  const selectedIds = new Set<string>();
+
+  for (const ing of SEED_DATABASE.ingredients) {
+    if (priorityIds.has(ing.id) && selected.length < maxIngredients) {
+      selected.push(ing);
+      selectedIds.add(ing.id);
+    }
+  }
+
+  for (const ing of SEED_DATABASE.ingredients) {
+    if (selected.length >= maxIngredients) break;
+    if (!selectedIds.has(ing.id)) {
+      selected.push(ing);
+      selectedIds.add(ing.id);
+    }
+  }
+
+  return {
+    database: {
+      ingredients: selected,
+      techniques: SEED_DATABASE.techniques,
+    },
+    presets: trialPresets,
+    maxIngredients,
+    totalIngredients,
+    totalPresets,
+  };
+}

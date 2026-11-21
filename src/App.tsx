@@ -7,7 +7,7 @@ import { IngredientStudio } from './components/IngredientStudio';
 import { LoginScreen } from './components/LoginScreen';
 import { PalateSimulator } from './components/PalateSimulator';
 import { RecipeAnalyzer } from './components/RecipeAnalyzer';
-import { normalizeIngredient, PRESET_RECIPES, SEED_DATABASE } from './data/seedData';
+import { getTrialDataset, normalizeIngredient, PRESET_RECIPES, SEED_DATABASE } from './data/seedData';
 import { simulateDish } from './engine/flavorEngine';
 import { AuthUser } from './types/auth';
 import { DishItem, Dosage, FlavorDatabase, Ingredient, PresetRecipe, Technique } from './types/flavor';
@@ -24,6 +24,13 @@ function buildPresetDish(preset: PresetRecipe): DishItem[] {
 export function App() {
   const [authChecked, setAuthChecked] = useState(false);
   const [currentUser, setCurrentUser] = useState<AuthUser | null>(null);
+
+  const isTrialUser = currentUser?.role === 'trial' || Boolean(currentUser?.isTrial);
+  const trialInfo = useMemo(
+    () => getTrialDataset(currentUser?.dataQuotaRatio || 0.1),
+    [currentUser?.dataQuotaRatio]
+  );
+  const availablePresets = isTrialUser ? trialInfo.presets : PRESET_RECIPES;
 
   const [database, setDatabase] = useState<FlavorDatabase>(SEED_DATABASE);
   const [dbLoadedForUser, setDbLoadedForUser] = useState(false);
@@ -61,6 +68,18 @@ export function App() {
       setDbLoadedForUser(false);
       setDatabase(SEED_DATABASE);
       skipNextSaveRef.current = true;
+      return;
+    }
+
+    if (currentUser.role === 'trial' || currentUser.isTrial) {
+      const subset = getTrialDataset(currentUser.dataQuotaRatio || 0.1);
+      skipNextSaveRef.current = true;
+      setDatabase(subset.database);
+      setActivePresetId(subset.presets[0]?.id ?? null);
+      if (subset.presets[0]) {
+        setDishItems(buildPresetDish(subset.presets[0]));
+      }
+      setDbLoadedForUser(true);
       return;
     }
 
@@ -116,7 +135,7 @@ export function App() {
 
   // Salva le modifiche del database sul server (per utente)
   useEffect(() => {
-    if (!currentUser || !dbLoadedForUser) return;
+    if (!currentUser || !dbLoadedForUser || isTrialUser) return;
     if (skipNextSaveRef.current) {
       skipNextSaveRef.current = false;
       return;
@@ -129,7 +148,7 @@ export function App() {
     }).catch(() => {
       // Ignora errori temporanei di rete
     });
-  }, [database, currentUser, dbLoadedForUser]);
+  }, [database, currentUser, dbLoadedForUser, isTrialUser]);
 
   const simulation = useMemo(() => simulateDish(dishItems, database), [dishItems, database]);
 
@@ -198,6 +217,12 @@ export function App() {
   };
 
   const handleAddCustomIngredient = (ing: Ingredient) => {
+    if (isTrialUser && database.ingredients.length >= trialInfo.maxIngredients) {
+      window.alert(
+        `Account di prova: hai raggiunto il limite del 10% dei dati utilizzabili (${trialInfo.maxIngredients} ingredienti su ${trialInfo.totalIngredients}).`
+      );
+      return;
+    }
     setDatabase((prev) => ({
       ...prev,
       ingredients: [...prev.ingredients, ing],
@@ -208,6 +233,12 @@ export function App() {
   const handleSaveIngredient = (ing: Ingredient) => {
     setDatabase((prev) => {
       const exists = prev.ingredients.some((i) => i.id === ing.id);
+      if (!exists && isTrialUser && prev.ingredients.length >= trialInfo.maxIngredients) {
+        window.alert(
+          `Account di prova: limite del 10% dei dati raggiunto (${trialInfo.maxIngredients} ingredienti su ${trialInfo.totalIngredients}).`
+        );
+        return prev;
+      }
       const nextIngredients = exists
         ? prev.ingredients.map((i) => (i.id === ing.id ? ing : i))
         : [...prev.ingredients, ing];
@@ -243,17 +274,29 @@ export function App() {
   };
 
   const handleImportDatabase = (db: FlavorDatabase) => {
+    if (isTrialUser) {
+      setDatabase({
+        ...db,
+        ingredients: db.ingredients.slice(0, trialInfo.maxIngredients),
+      });
+      return;
+    }
     setDatabase(db);
   };
 
   const handleResetDatabase = () => {
+    if (isTrialUser) {
+      skipNextSaveRef.current = true;
+      setDatabase(trialInfo.database);
+      return;
+    }
     fetch('/api/database', { method: 'DELETE', credentials: 'include' }).catch(() => {});
     skipNextSaveRef.current = true;
     setDatabase(SEED_DATABASE);
   };
 
   const handleLoadRecipeIntoSimulator = (items: DishItem[], customIngredients: Ingredient[]) => {
-    if (customIngredients.length > 0) {
+    if (customIngredients.length > 0 && !isTrialUser) {
       setDatabase((prev) => {
         const existingIds = new Set(prev.ingredients.map((i) => i.id));
         const toAdd = customIngredients.filter((ci) => !existingIds.has(ci.id));
@@ -292,7 +335,7 @@ export function App() {
         <Header
           activeView={activeView}
           onChangeView={setActiveView}
-          presets={PRESET_RECIPES}
+          presets={availablePresets}
           activePresetId={activePresetId}
           onLoadPreset={handleLoadPreset}
           onClearDish={handleClearDish}
@@ -302,8 +345,17 @@ export function App() {
           currentUser={currentUser}
           dishCount={dishItems.length}
           ingredientCount={database.ingredients.length}
+          totalIngredientCount={trialInfo.totalIngredients}
           techniqueCount={database.techniques.length}
         />
+        {isTrialUser && (
+          <div className="border-b border-amber-400/20 bg-amber-500/[0.08] px-4 py-1.5 text-center text-[11px] text-amber-200">
+            <strong>Account di Prova senza password</strong> ({currentUser.email}) &bull; Attivo il{' '}
+            <strong>10% dei dati utilizzabili</strong>: {database.ingredients.length} su{' '}
+            {trialInfo.totalIngredients} ingredienti e {availablePresets.length} su{' '}
+            {trialInfo.totalPresets} ricette test.
+          </div>
+        )}
       </div>
 
       <main className="mx-auto w-full max-w-[1520px] flex-1 px-4 py-5 sm:px-6 lg:min-h-0 lg:overflow-hidden lg:py-0">

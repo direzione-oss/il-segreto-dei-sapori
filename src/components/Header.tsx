@@ -33,6 +33,7 @@ interface HeaderProps {
   currentUser: AuthUser;
   dishCount: number;
   ingredientCount: number;
+  totalIngredientCount?: number;
   techniqueCount: number;
 }
 
@@ -49,8 +50,10 @@ export const Header: React.FC<HeaderProps> = ({
   currentUser,
   dishCount,
   ingredientCount,
+  totalIngredientCount,
   techniqueCount,
 }) => {
+  const isTrial = currentUser.role === 'trial' || Boolean(currentUser.isTrial);
   const [isPresetMenuOpen, setIsPresetMenuOpen] = useState(false);
   const [presetQuery, setPresetQuery] = useState('');
   const presetDropdownRef = useRef<HTMLDivElement | null>(null);
@@ -170,7 +173,9 @@ export const Header: React.FC<HeaderProps> = ({
               <FlaskConical className="h-3.5 w-3.5" />
               <span>Atlante Ingredienti</span>
               <span className="rounded bg-white/10 px-1.5 py-0.5 font-code text-[10px]">
-                {ingredientCount}
+                {isTrial && totalIngredientCount
+                  ? `${ingredientCount}/${totalIngredientCount}`
+                  : ingredientCount}
               </span>
             </button>
           </nav>
@@ -332,6 +337,11 @@ export const Header: React.FC<HeaderProps> = ({
                 <User className="h-3.5 w-3.5 text-stone-400" />
               )}
               <span className="hidden md:inline">{currentUser.name}</span>
+              {isTrial && (
+                <span className="rounded border border-amber-400/35 bg-amber-500/15 px-1.5 py-0.5 font-code text-[10px] font-semibold text-amber-300">
+                  10%
+                </span>
+              )}
             </button>
 
             <button

@@ -10,6 +10,7 @@ interface AccountModalProps {
 
 export const AccountModal: React.FC<AccountModalProps> = ({ isOpen, onClose, currentUser }) => {
   const isAdmin = currentUser.role === 'admin';
+  const isTrial = currentUser.role === 'trial' || Boolean(currentUser.isTrial);
   const [tab, setTab] = useState<'profile' | 'users'>('profile');
 
   // Cambio password personale
@@ -203,75 +204,97 @@ export const AccountModal: React.FC<AccountModalProps> = ({ isOpen, onClose, cur
         {/* Body */}
         <div className="max-h-[68vh] overflow-y-auto p-6">
           {tab === 'profile' && (
-            <form onSubmit={handleChangePassword} className="space-y-4">
+            <div className="space-y-4">
               <div className="rounded-xl border border-white/10 bg-white/[0.03] p-4 text-xs text-stone-300">
                 <div className="flex items-center justify-between">
                   <span className="text-stone-400">Ruolo account</span>
                   <span className="inline-flex items-center gap-1 rounded-full border border-amber-400/30 bg-amber-500/10 px-2.5 py-0.5 font-medium text-amber-200">
                     {isAdmin && <Shield className="h-3 w-3" />}
-                    {isAdmin ? 'Amministratore' : 'Utente'}
+                    {isAdmin
+                      ? 'Amministratore'
+                      : isTrial
+                        ? 'Account di Prova (10% Dati • Senza Password)'
+                        : 'Utente'}
                   </span>
                 </div>
               </div>
 
-              <h3 className="text-sm font-medium text-stone-200">Cambia password</h3>
-
-              <div>
-                <label className="mb-1 block text-xs text-stone-400">Password attuale</label>
-                <input
-                  type="password"
-                  required
-                  value={currentPassword}
-                  onChange={(e) => setCurrentPassword(e.target.value)}
-                  className="w-full rounded-lg border border-white/10 bg-white/[0.04] px-3 py-2 text-sm text-stone-100 outline-none focus:border-amber-400/60"
-                />
-              </div>
-
-              <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-                <div>
-                  <label className="mb-1 block text-xs text-stone-400">Nuova password</label>
-                  <input
-                    type="password"
-                    required
-                    minLength={6}
-                    value={newPassword}
-                    onChange={(e) => setNewPassword(e.target.value)}
-                    className="w-full rounded-lg border border-white/10 bg-white/[0.04] px-3 py-2 text-sm text-stone-100 outline-none focus:border-amber-400/60"
-                  />
+              {isTrial ? (
+                <div className="rounded-xl border border-amber-400/25 bg-amber-500/[0.07] p-4 text-xs leading-relaxed text-amber-100">
+                  <div className="font-semibold text-amber-300">
+                    Modalità Prova Attiva (10% del Catalogo)
+                  </div>
+                  <p className="mt-1 text-stone-300">
+                    Stai utilizzando l’account dimostrativo senza password (
+                    <span className="font-code text-amber-200">{currentUser.email}</span>). Hai
+                    accesso completo al simulatore, all’analisi ricette e all’atlante su un
+                    campione pari al <strong>10% dei dati totali</strong> del programma.
+                  </p>
                 </div>
-                <div>
-                  <label className="mb-1 block text-xs text-stone-400">Conferma nuova password</label>
-                  <input
-                    type="password"
-                    required
-                    minLength={6}
-                    value={confirmPassword}
-                    onChange={(e) => setConfirmPassword(e.target.value)}
-                    className="w-full rounded-lg border border-white/10 bg-white/[0.04] px-3 py-2 text-sm text-stone-100 outline-none focus:border-amber-400/60"
-                  />
-                </div>
-              </div>
+              ) : (
+                <form onSubmit={handleChangePassword} className="space-y-4">
+                  <h3 className="text-sm font-medium text-stone-200">Cambia password</h3>
 
-              {pwMsg && (
-                <div
-                  className={`rounded-lg border px-3 py-2 text-xs ${
-                    pwMsg.type === 'ok'
-                      ? 'border-emerald-500/30 bg-emerald-500/10 text-emerald-200'
-                      : 'border-rose-500/30 bg-rose-500/10 text-rose-200'
-                  }`}
-                >
-                  {pwMsg.text}
-                </div>
+                  <div>
+                    <label className="mb-1 block text-xs text-stone-400">Password attuale</label>
+                    <input
+                      type="password"
+                      required
+                      value={currentPassword}
+                      onChange={(e) => setCurrentPassword(e.target.value)}
+                      className="w-full rounded-lg border border-white/10 bg-white/[0.04] px-3 py-2 text-sm text-stone-100 outline-none focus:border-amber-400/60"
+                    />
+                  </div>
+
+                  <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                    <div>
+                      <label className="mb-1 block text-xs text-stone-400">Nuova password</label>
+                      <input
+                        type="password"
+                        required
+                        minLength={6}
+                        value={newPassword}
+                        onChange={(e) => setNewPassword(e.target.value)}
+                        className="w-full rounded-lg border border-white/10 bg-white/[0.04] px-3 py-2 text-sm text-stone-100 outline-none focus:border-amber-400/60"
+                      />
+                    </div>
+                    <div>
+                      <label className="mb-1 block text-xs text-stone-400">
+                        Conferma nuova password
+                      </label>
+                      <input
+                        type="password"
+                        required
+                        minLength={6}
+                        value={confirmPassword}
+                        onChange={(e) => setConfirmPassword(e.target.value)}
+                        className="w-full rounded-lg border border-white/10 bg-white/[0.04] px-3 py-2 text-sm text-stone-100 outline-none focus:border-amber-400/60"
+                      />
+                    </div>
+                  </div>
+
+                  {pwMsg && (
+                    <div
+                      className={`rounded-lg border px-3 py-2 text-xs ${
+                        pwMsg.type === 'ok'
+                          ? 'border-emerald-500/30 bg-emerald-500/10 text-emerald-200'
+                          : 'border-rose-500/30 bg-rose-500/10 text-rose-200'
+                      }`}
+                    >
+                      {pwMsg.text}
+                    </div>
+                  )}
+
+                  <button
+                    type="submit"
+                    disabled={pwLoading}
+                    className="rounded-lg bg-amber-500 px-4 py-2 text-xs font-semibold text-[#0b0d10] transition hover:bg-amber-400 disabled:opacity-60"
+                  >
+                    {pwLoading ? 'Salvataggio...' : 'Aggiorna password'}
+                  </button>
+                </form>
               )}
-
-              <button
-                type="submit"
-                disabled={pwLoading}
-                className="rounded-lg bg-amber-500 px-4 py-2 text-xs font-semibold text-[#0b0d10] transition hover:bg-amber-400 disabled:opacity-60"
-              >
-                {pwLoading ? 'Salvataggio...' : 'Aggiorna password'}
-              </button>
-            </form>
+            </div>
           )}
 
           {tab === 'users' && isAdmin && (
@@ -315,19 +338,25 @@ export const AccountModal: React.FC<AccountModalProps> = ({ isOpen, onClose, cur
                   />
                   <input
                     type="password"
-                    required
-                    minLength={6}
-                    placeholder="Password (min. 6 caratteri)"
-                    value={newUserPassword}
+                    required={newUserRole !== 'trial'}
+                    disabled={newUserRole === 'trial'}
+                    minLength={newUserRole === 'trial' ? undefined : 6}
+                    placeholder={
+                      newUserRole === 'trial'
+                        ? 'Senza password (account di prova)'
+                        : 'Password (min. 6 caratteri)'
+                    }
+                    value={newUserRole === 'trial' ? '' : newUserPassword}
                     onChange={(e) => setNewUserPassword(e.target.value)}
-                    className="rounded-lg border border-white/10 bg-[#0b0d10] px-3 py-2 text-xs text-stone-100 outline-none focus:border-amber-400/60"
+                    className="rounded-lg border border-white/10 bg-[#0b0d10] px-3 py-2 text-xs text-stone-100 outline-none focus:border-amber-400/60 disabled:opacity-50"
                   />
                   <select
                     value={newUserRole}
                     onChange={(e) => setNewUserRole(e.target.value as UserRole)}
                     className="rounded-lg border border-white/10 bg-[#0b0d10] px-3 py-2 text-xs text-stone-100 outline-none focus:border-amber-400/60"
                   >
-                    <option value="user">Utente standard</option>
+                    <option value="user">Utente standard (100%)</option>
+                    <option value="trial">Account di prova senza PW (10%)</option>
                     <option value="admin">Amministratore</option>
                   </select>
                 </div>
@@ -358,22 +387,30 @@ export const AccountModal: React.FC<AccountModalProps> = ({ isOpen, onClose, cur
                             className={`rounded-full px-2 py-0.5 text-[10px] font-medium ${
                               u.role === 'admin'
                                 ? 'bg-amber-500/15 text-amber-300'
-                                : 'bg-white/10 text-stone-300'
+                                : u.role === 'trial'
+                                  ? 'bg-sky-500/15 text-sky-300'
+                                  : 'bg-white/10 text-stone-300'
                             }`}
                           >
-                            {u.role === 'admin' ? 'Admin' : 'Utente'}
+                            {u.role === 'admin'
+                              ? 'Admin'
+                              : u.role === 'trial'
+                                ? 'Prova 10% (No PW)'
+                                : 'Utente'}
                           </span>
                         </div>
                         <div className="text-xs text-stone-400">{u.email}</div>
                       </div>
                       <div className="flex items-center gap-1.5">
-                        <button
-                          type="button"
-                          onClick={() => handleResetUserPassword(u)}
-                          className="rounded-lg border border-white/10 bg-white/[0.04] px-2.5 py-1 text-[11px] text-stone-300 transition hover:border-amber-400/40 hover:text-amber-200"
-                        >
-                          Reset PW
-                        </button>
+                        {u.role !== 'trial' && (
+                          <button
+                            type="button"
+                            onClick={() => handleResetUserPassword(u)}
+                            className="rounded-lg border border-white/10 bg-white/[0.04] px-2.5 py-1 text-[11px] text-stone-300 transition hover:border-amber-400/40 hover:text-amber-200"
+                          >
+                            Reset PW
+                          </button>
+                        )}
                         {u.id !== currentUser.id && (
                           <button
                             type="button"
