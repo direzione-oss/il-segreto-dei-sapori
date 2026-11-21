@@ -36,6 +36,7 @@ import {
   TASTE_KEYS,
   TASTE_META,
 } from '../types/flavor';
+import { FlavorSolid3D } from './FlavorSolid3D';
 
 interface PalateSimulatorProps {
   simulation: DishSimulationResult;
@@ -420,6 +421,12 @@ export const PalateSimulator: React.FC<PalateSimulatorProps> = ({
                     </div>
                   </div>
                 </div>
+
+                {/* Solido 3D della Ricetta: Cristallo Sensoriale Ruotabile */}
+                <FlavorSolid3D
+                  simulation={simulation}
+                  recipeName="Profilo Sensoriale del Piatto"
+                />
 
                 {/* Psycho-sensory Modulation Formulas Summary */}
                 <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-4">

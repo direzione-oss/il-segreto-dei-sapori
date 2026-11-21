@@ -3,7 +3,6 @@ import {
   AlertCircle,
   ArrowRight,
   Bookmark,
-  BookOpen,
   Check,
   CheckCircle2,
   ChefHat,
@@ -52,6 +51,7 @@ import {
   SavedRecipe,
 } from '../engine/recipeParser';
 import { AuthUser } from '../types/auth';
+import { FlavorSolid3D } from './FlavorSolid3D';
 import {
   AROMA_KEYS,
   AROMA_META,
@@ -928,39 +928,24 @@ export const RecipeAnalyzer: React.FC<RecipeAnalyzerProps> = ({
                   Ricette Storiche Italiane &amp; Esempi ({SAMPLE_RECIPES.length})
                 </span>
               </div>
-              <div className="mb-2">
-                <select
-                  aria-label="Seleziona una ricetta storica italiana"
-                  defaultValue=""
-                  onChange={(e) => {
-                    const found = SAMPLE_RECIPES.find((s) => s.id === e.target.value);
-                    if (found) handleLoadSample(found);
-                  }}
-                  className="w-full rounded-xl border border-amber-400/30 bg-[#0d1016] px-3 py-2 text-xs font-medium text-amber-100 outline-none transition focus:border-amber-400/60"
-                >
-                  <option value="" disabled>
-                    📖 Scegli una delle 30 Ricette Storiche della Tradizione Italiana...
+              <select
+                aria-label="Seleziona una ricetta storica italiana"
+                defaultValue=""
+                onChange={(e) => {
+                  const found = SAMPLE_RECIPES.find((s) => s.id === e.target.value);
+                  if (found) handleLoadSample(found);
+                }}
+                className="w-full rounded-xl border border-amber-400/30 bg-[#0d1016] px-3 py-2 text-xs font-medium text-amber-100 outline-none transition focus:border-amber-400/60"
+              >
+                <option value="" disabled>
+                  📖 Scegli una delle 30 Ricette Storiche della Tradizione Italiana...
+                </option>
+                {SAMPLE_RECIPES.map((s) => (
+                  <option key={s.id} value={s.id}>
+                    {s.label} — {s.title}
                   </option>
-                  {SAMPLE_RECIPES.map((s) => (
-                    <option key={s.id} value={s.id}>
-                      {s.label} — {s.title}
-                    </option>
-                  ))}
-                </select>
-              </div>
-              <div className="flex flex-wrap gap-1.5">
-                {SAMPLE_RECIPES.slice(0, 6).map((s) => (
-                  <button
-                    key={s.id}
-                    type="button"
-                    onClick={() => handleLoadSample(s)}
-                    className="inline-flex items-center gap-1.5 rounded-lg border border-white/10 bg-white/[0.03] px-2.5 py-1.5 text-[11px] text-stone-300 transition hover:border-amber-400/40 hover:bg-amber-500/10 hover:text-amber-200"
-                  >
-                    <BookOpen className="h-3 w-3 text-amber-400" />
-                    <span>{s.label}</span>
-                  </button>
                 ))}
-              </div>
+              </select>
             </div>
 
             {/* Titolo opzionale */}
@@ -1831,6 +1816,14 @@ export const RecipeAnalyzer: React.FC<RecipeAnalyzerProps> = ({
                         </ResponsiveContainer>
                       </div>
                     </div>
+                  </div>
+
+                  {/* Solido 3D della Ricetta: Cristallo Sensoriale Ruotabile */}
+                  <div className="mt-5">
+                    <FlavorSolid3D
+                      simulation={simulation}
+                      recipeName={analysis.title || 'Ricetta Analizzata'}
+                    />
                   </div>
 
                   {/* Valori numerici gusti */}
