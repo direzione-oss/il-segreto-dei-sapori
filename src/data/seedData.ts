@@ -2008,6 +2008,20 @@ export const SEED_TECHNIQUES: Technique[] = [
     },
   },
   {
+    id: 'tech_floured_meat_sear',
+    name: 'Infarinatura e Rosolatura della carne (Scaloppine / Spezzatino / Bocconcini)',
+    type: 'dry_heat',
+    preconditions: { min_protein: 0.015 },
+    deltas: {
+      volume_shift: 1,
+      temporal_shift: 'mid',
+      taste_add: { umami: 3.5, sweet: 1.5, salty: 0.5 },
+      mouthfeel_add: { crunchiness: 3.5, creaminess: 4.0, richness: 2.5, juiciness: 2.0 },
+      aroma_multipliers: { sulfurous: 0.4, green_herbaceous: 0.4 },
+      aroma_add: { roasted_pyrazine: 7.0, caramel_sweet: 3.5, umami_funky: 2.0 },
+    },
+  },
+  {
     id: 'tech_caramelize_braise',
     name: 'Stufatura lenta / Caramellizzazione dolce',
     type: 'dry_heat',

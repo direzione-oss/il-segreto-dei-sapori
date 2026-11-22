@@ -102,7 +102,7 @@ export const ITALIAN_HISTORICAL_PRESETS: PresetRecipe[] = [
     description:
       'Stufatura lenta del vitello che trasforma il collagene in gelatina setosa, ravvivata a fine cottura dalla gremolada a crudo (scorza di limone, aglio e prezzemolo).',
     items: [
-      { ingredientId: 'ing_veal', techniqueId: 'tech_caramelize_braise', dosage: 'main' },
+      { ingredientId: 'ing_veal', techniqueId: 'tech_floured_meat_sear', dosage: 'main' },
       { ingredientId: 'ing_butter', techniqueId: 'tech_maillard_sear', dosage: 'secondary' },
       { ingredientId: 'ing_onion_yellow', techniqueId: 'tech_caramelize_braise', dosage: 'secondary' },
       { ingredientId: 'ing_white_wine_dry', techniqueId: 'tech_wine_reduction', dosage: 'garnish' },
@@ -606,7 +606,7 @@ Fuori dal fuoco manteca energicamente all'onda con il burro freddo restante e il
 - Sale marino e pepe nero q.b.
 
 Procedimento:
-Rosola gli ossibuchi di vitello nel burro spumeggiante con la cipolla fino a doratura su entrambi i lati.
+Infarina leggermente gli ossibuchi di vitello scuotendo la farina in eccesso, poi rosolali nel burro spumeggiante con la cipolla fino a formare una bella doratura su entrambi i lati.
 Sfuma con il vino bianco secco e prosegui la brasatura lenta a fuoco dolce con coperchio per circa 90 minuti.
 A fine cottura aggiungi a crudo la gremolada: trito finissimo di prezzemolo, aglio e scorza di limone.`,
   },

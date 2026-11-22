@@ -387,6 +387,7 @@ const TECHNIQUE_RULES: { techId: string; label: string; regex: RegExp }[] = [
   { techId: 'tech_dry_toast_spices', label: 'Tostatura a secco', regex: /\b(tostat\w*|tostare)\b/i },
   { techId: 'tech_caramelize_braise', label: 'Stufatura / Caramellizzazione', regex: /\b(stuf\w*|caramell\w*|appass\w*)\b/i },
   { techId: 'tech_oven_roast', label: 'Arrostitura al Forno', regex: /\b(in\s+forno|al\s+forno|inforn\w*|forno\s+statico|forno\s+ventilato)\b/i },
+  { techId: 'tech_floured_meat_sear', label: 'Infarinatura e Rosolatura della carne', regex: /\b(infarin\w*|passat[aeoi]\s+nell[ae]\s+farin\w*|farinatura|scaloppin\w*)\b/i },
   { techId: 'tech_maillard_sear', label: 'Rosolatura / Maillard', regex: /\b(rosol\w*|scott\w*|arrost\w*|padella\s+a\s+fuoco\s+vivo|croccant\w*|maillard|dorat\w*|saltat\w*)\b/i },
   { techId: 'tech_blanch_shock', label: 'Sbollentatura / Blanching', regex: /\b(sbollent\w*|acqua\s+e\s+ghiaccio|blanch\w*)\b/i },
   { techId: 'tech_steam_poach', label: 'Vapore / Poché', regex: /\b(vapore|poch[eé]|in\s+camicia)\b/i },
@@ -899,6 +900,9 @@ function detectPhaseTitleAndOutput(
   totalPhases: number
 ): { titolo: string; output_nome: string } {
   const norm = stripAccents(sentence);
+  if (/\b(infarin|passa\w*\s+nell\w*\s+farina|farinatura|scaloppin)\b/.test(norm) || techId === 'tech_floured_meat_sear') {
+    return { titolo: 'Infarinatura e rosolatura della carne', output_nome: 'Carne infarinata e rosolata' };
+  }
   if (/\b(soffrigg|soffritto|battuto|cipolla|aglio)\b/.test(norm) && order === 1) {
     return { titolo: 'Base aromatica e soffritto', output_nome: 'Base soffritto' };
   }
